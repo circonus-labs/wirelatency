@@ -20,6 +20,17 @@ var debug_measurements = flag.Bool("debug_measurements", false, "Debug measureme
 var haveLocalAddresses bool = false
 var localAddresses map[gopacket.Endpoint]bool = make(map[gopacket.Endpoint]bool)
 
+func AddLocalIP(ip net.IP) {
+	if ip.To4() != nil {
+		haveLocalAddresses = true
+		localAddresses[gopacket.NewEndpoint(layers.EndpointIPv4, ip.To4())] = true
+	}
+	if ip.To16() != nil {
+		haveLocalAddresses = true
+		localAddresses[gopacket.NewEndpoint(layers.EndpointIPv6, ip.To16())] = true
+	}
+}
+
 func wl_track_int64(units string, value int64, name string) {
 	if *debug_measurements {
 		log.Printf("[METRIC] %s -> %d %s", name, value, units)
