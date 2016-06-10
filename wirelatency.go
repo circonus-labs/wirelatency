@@ -16,13 +16,22 @@ import (
 )
 
 var metrics *circonusgometrics.CirconusMetrics
+var debug_measurements = flag.Bool("debug_measurements", false, "Debug measurement recording")
+var haveLocalAddresses bool = false
+var localAddresses map[gopacket.Endpoint]bool = make(map[gopacket.Endpoint]bool)
 
 func wl_track_int64(units string, value int64, name string) {
+	if *debug_measurements {
+		log.Printf("[METRIC] %s -> %d %s", name, value, units)
+	}
 	if metrics != nil {
 		metrics.SetHistogramValue(name, float64(value))
 	}
 }
 func wl_track_float64(units string, value float64, name string) {
+	if *debug_measurements {
+		log.Printf("[METRIC] %s -> %f %s", name, value, units)
+	}
 	if metrics != nil {
 		metrics.SetHistogramValue(name, value)
 	}
@@ -35,13 +44,13 @@ func SetMetrics(m *circonusgometrics.CirconusMetrics) {
 type WireLatencyTCPProtocol interface {
 	Name() string
 	DefaultPort() layers.TCPPort
-	Factory(port layers.TCPPort, inbound bool, config *string) tcpassembly.StreamFactory
+	Factory(port layers.TCPPort, config *string) tcpassembly.StreamFactory
 }
 
 type twoWayAssembly struct {
-	proto   *WireLatencyTCPProtocol
-	Config  *string
-	in, out *tcpassembly.Assembler
+	proto     *WireLatencyTCPProtocol
+	assembler *tcpassembly.Assembler
+	Config    *string
 }
 
 func (twa *twoWayAssembly) Proto() *WireLatencyTCPProtocol {
@@ -67,23 +76,20 @@ func RegisterTCPPort(port layers.TCPPort, protocolName string, config *string) e
 		return errors.New("port already mapped")
 	}
 
-	streamFactory_in := (*wp).Factory(port, true, config)
-	streamPool_in := tcpassembly.NewStreamPool(streamFactory_in)
-	assembly_in := tcpassembly.NewAssembler(streamPool_in)
-	streamFactory_out := (*wp).Factory(port, false, config)
-	streamPool_out := tcpassembly.NewStreamPool(streamFactory_out)
-	assembly_out := tcpassembly.NewAssembler(streamPool_out)
+	streamFactory := (*wp).Factory(port, config)
+	streamPool := tcpassembly.NewStreamPool(streamFactory)
+	assembler := tcpassembly.NewAssembler(streamPool)
 	portAssemblerMap[port] = &twoWayAssembly{
-		proto:  wp,
-		in:     assembly_in,
-		out:    assembly_out,
-		Config: config,
+		proto:     wp,
+		assembler: assembler,
+		Config:    config,
 	}
 	return nil
 }
 
 var iface = flag.String("iface", "auto", "Select the system interface to sniff")
-var debug_capture = flag.Bool("debug_capture", false, "Debug packet capture")
+var debug_capture_data = flag.Bool("debug_capture_data", false, "Debug packet capture data")
+var debug_capture = flag.Bool("debug_capture", false, "Debug packet assembly")
 
 func Protocols() map[string]*WireLatencyTCPProtocol {
 	return protocols
@@ -106,10 +112,18 @@ func selectInterface() string {
 		for _, ifi := range addrs {
 			try_iface := &iface_try.Name
 			if ip, _, _ := net.ParseCIDR(ifi.String()); ip != nil {
-				if ip.IsGlobalUnicast() && ip.To4() != nil {
-					if *iface == "auto" {
-						choice = *try_iface
-						iface = &choice
+				if ip.IsGlobalUnicast() {
+					if ip.To16() != nil {
+						haveLocalAddresses = true
+						localAddresses[gopacket.NewEndpoint(layers.EndpointIPv6, ip.To16())] = true
+					}
+					if ip.To4() != nil {
+						haveLocalAddresses = true
+						localAddresses[gopacket.NewEndpoint(layers.EndpointIPv4, ip.To4())] = true
+						if *iface == "auto" {
+							choice = *try_iface
+							iface = &choice
+						}
 					}
 				}
 			}
@@ -160,9 +174,8 @@ func Capture() {
 			if *debug_capture {
 				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
 			}
-			for _, assembly := range portAssemblerMap {
-				assembly.in.FlushOlderThan(time.Now().Add(flushDuration))
-				assembly.out.FlushOlderThan(time.Now().Add(flushDuration))
+			for _, twa := range portAssemblerMap {
+				twa.assembler.FlushOlderThan(time.Now().Add(flushDuration))
 			}
 
 		case packet := <-packets:
@@ -173,15 +186,11 @@ func Capture() {
 				continue
 			}
 			tcp := packet.TransportLayer().(*layers.TCP)
-			var assembler *tcpassembly.Assembler
-			if assembly, ok := portAssemblerMap[tcp.SrcPort]; ok {
-				assembler = assembly.out
+			if twa, ok := portAssemblerMap[tcp.SrcPort]; ok {
+				twa.assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
 			}
-			if assembly, ok := portAssemblerMap[tcp.DstPort]; ok {
-				assembler = assembly.in
-			}
-			if assembler != nil {
-				assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
+			if twa, ok := portAssemblerMap[tcp.DstPort]; ok {
+				twa.assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
 			}
 		}
 	}
