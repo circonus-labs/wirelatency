@@ -201,11 +201,11 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 func (s *tcpStream) ReassemblyComplete() {
 	if dsess, ok := sessions[s.net]; ok {
 		if parent, ok := dsess[s.transport]; ok {
-			atomic.AddInt64(&parent.factory.n_sessions, -1)
 			if *debug_capture {
 				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
 			}
 			if parent.in != nil && parent.in.reader != nil {
+				atomic.AddInt64(&parent.factory.n_sessions, -1)
 				parent.in.reader.ReassemblyComplete()
 				parent.in.reader = nil
 			}
