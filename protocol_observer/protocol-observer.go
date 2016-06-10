@@ -3,7 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
-"github.com/circonus-labs/circonus-gometrics"
+	"github.com/circonus-labs/circonus-gometrics"
 	"github.com/circonus-labs/wirelatency"
 	"github.com/google/gopacket/layers"
 	"log"
@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 )
+
+var version string = "0.0.3"
 
 type regflag struct{}
 
@@ -41,35 +43,51 @@ func (r *regflag) Set(value string) error {
 }
 
 var debug_circonus = flag.Bool("debug_circonus", false, "Debug CirconusMetrics")
-
+var vflag = flag.Bool("v", false, "Show version information")
+var quiet = flag.Bool("s", false, "Be quiet")
 var apihost = flag.String("apihost", "", "Circonus API Hostname")
 var apitoken = flag.String("apitoken", "", "Circonus API Token")
 var instanceid = flag.String("instanceid", "", "This machine's unique identifier")
 var submissionurl = flag.String("submissionurl", "", "Optional HTTPTrap URL")
 var checkid = flag.Int("checkid", 0, "The Circonus check ID (not bundle id)")
 var brokergroupid = flag.Int("brokergroupid", 0, "The broker group id")
+
 //var brokertag = flag.String("brokertag", "", "The broker tag for selection")
 
 func main() {
 	var registrations_flag regflag
 	flag.Var(&registrations_flag, "wire", "<name>:<port>[:<config>]")
 	flag.Parse()
+	if *vflag {
+		fmt.Printf("%s version %s\n", os.Args[0], version)
+		os.Exit(0)
+	}
 
-     metrics :=  circonusgometrics.NewCirconusMetrics()
-     if *apitoken == "" {
-        flag.Usage()
-        os.Exit(2)
-     }
-     if *apihost != "" { metrics.ApiHost = *apihost }
-     if *instanceid != "" { metrics.InstanceId = *instanceid }
-     if *submissionurl != "" { metrics.SubmissionUrl = *submissionurl }
-     if *checkid > 0 { metrics.CheckId = *checkid }
-     if *brokergroupid > 0 { metrics.BrokerGroupId = *brokergroupid }
-     // if *brokertag != "" { metrics.BrokerSelectTag = *brokertag }
-     metrics.ApiToken = *apitoken
-     metrics.Debug = *debug_circonus
-     metrics.Start()
-     wirelatency.SetMetrics(metrics)
+	if *apitoken == "" {
+		log.Printf("No Circonus API Token specified, no reporting will happen.")
+	} else {
+		metrics := circonusgometrics.NewCirconusMetrics()
+		if *apihost != "" {
+			metrics.ApiHost = *apihost
+		}
+		if *instanceid != "" {
+			metrics.InstanceId = *instanceid
+		}
+		if *submissionurl != "" {
+			metrics.SubmissionUrl = *submissionurl
+		}
+		if *checkid > 0 {
+			metrics.CheckId = *checkid
+		}
+		if *brokergroupid > 0 {
+			metrics.BrokerGroupId = *brokergroupid
+		}
+		// if *brokertag != "" { metrics.BrokerSelectTag = *brokertag }
+		metrics.ApiToken = *apitoken
+		metrics.Debug = *debug_circonus
+		metrics.Start()
+		wirelatency.SetMetrics(metrics)
+	}
 
 	prots := wirelatency.Protocols()
 	mapping := wirelatency.PortMap()
@@ -84,10 +102,12 @@ func main() {
 	}
 	for port, twa := range mapping {
 		config := (*twa).Config
-		if config == nil {
-			log.Printf("\t*:%v -> %v", port, (*twa.Proto()).Name())
-		} else {
-			log.Printf("\t*:%v -> %v(%v)", port, (*twa.Proto()).Name(), *config)
+		if ! *quiet {
+			if config == nil {
+				log.Printf("\t*:%v -> %v", port, (*twa.Proto()).Name())
+			} else {
+				log.Printf("\t*:%v -> %v(%v)", port, (*twa.Proto()).Name(), *config)
+			}
 		}
 	}
 	wirelatency.Capture()
