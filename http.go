@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"flag"
-	"fmt"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"io"
 	"io/ioutil"
@@ -60,13 +59,13 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 			return
 		} else if err != nil {
 			if *debug_wl_http {
-				log.Println("Error parsing HTTP requests:", err)
+				log.Println("[DEBUG] Error parsing HTTP requests:", err)
 			}
 		} else {
 			req = newReq
 			nbytes := tcpreader.DiscardBytesToEOF(req.Body)
 			if *debug_wl_http {
-				fmt.Println("Body contains", nbytes, "bytes")
+				log.Println("[DEBUG] Body contains", nbytes, "bytes")
 			}
 			p.l.Lock()
 			start := p.last_in
@@ -88,7 +87,7 @@ func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
 			return
 		} else if err != nil {
 			if *debug_wl_http {
-				log.Println("Error parsing HTTP responses:", err)
+				log.Println("[DEBUG] Error parsing HTTP responses:", err)
 			}
 			return
 		} else {
@@ -102,7 +101,7 @@ func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
 			nbytes := tcpreader.DiscardBytesToEOF(resp.Body)
 			resp.Body.Close()
 			if *debug_wl_http {
-				fmt.Println("Body contains", nbytes, "bytes")
+				log.Println("[DEBUG] Body contains", nbytes, "bytes")
 			}
 			tt_duration := time.Now().Sub(start)
 			name := UrlMatch((*stream.factory).config, req.URL.Path)

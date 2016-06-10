@@ -48,7 +48,7 @@ var sessions = make(map[gopacket.Flow]map[gopacket.Flow]*tcpTwoWayStream)
 func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
 	if transport.Dst().String() == strconv.Itoa(int(factory.port)) && factory.inbound {
 		if *debug_capture {
-			log.Printf("new TCP stream %v:%v started", net, transport)
+			log.Printf("[DEBUG] new TCP stream %v:%v started", net, transport)
 		}
 		atomic.AddInt64(&factory.n_clients, 1)
 		atomic.AddInt64(&factory.n_sessions, 1)
@@ -103,7 +103,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 	if s.parent.state == sessionStateBad {
 		if *debug_capture {
-			log.Printf("%v:%v in bad state", s.net, s.transport)
+			log.Printf("[DEBUG] %v:%v in bad state", s.net, s.transport)
 		}
 		return
 	}
@@ -133,7 +133,7 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		s.bytes += int64(len(reassembly.Bytes))
 		if s.parent.interp != nil {
 			if *debug_capture {
-				log.Printf("%v %v", direction, reassembly.Bytes)
+				log.Printf("[DEBUG] %v %v", direction, reassembly.Bytes)
 			}
 			if s.parent.in == s {
 				if !(*s.parent.interp).InBytes(reassembly.Seen, reassembly.Bytes) {
@@ -174,7 +174,7 @@ func (s *tcpStream) ReassemblyComplete() {
 		delete(dsess, s.transport)
 		if len(dsess) == 0 {
 			if *debug_capture {
-				log.Printf("removing session: %v:%v", s.net, s.transport)
+				log.Printf("[DEBUG] removing session: %v:%v", s.net, s.transport)
 			}
 			delete(sessions, s.net)
 		}

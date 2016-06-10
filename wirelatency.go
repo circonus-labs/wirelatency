@@ -10,6 +10,7 @@ import (
 	"github.com/google/gopacket/tcpassembly"
 	"log"
 	"net"
+	"runtime"
 	"strconv"
 	"time"
 )
@@ -91,9 +92,7 @@ func PortMap() map[layers.TCPPort]*twoWayAssembly {
 	return portAssemblerMap
 }
 func selectInterface() string {
-	if *iface != "auto" {
-		return *iface
-	}
+	choice := *iface
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		log.Fatal(err)
@@ -105,10 +104,13 @@ func selectInterface() string {
 			continue
 		}
 		for _, ifi := range addrs {
-			iface = &iface_try.Name
+			try_iface := &iface_try.Name
 			if ip, _, _ := net.ParseCIDR(ifi.String()); ip != nil {
 				if ip.IsGlobalUnicast() && ip.To4() != nil {
-					return *iface
+					if *iface == "auto" {
+						choice = *try_iface
+						iface = &choice
+					}
 				}
 			}
 		}
@@ -126,10 +128,18 @@ func Capture() {
 	filter = filter + ")"
 
 	ifname := selectInterface()
-	if *debug_capture {
-		log.Printf("Activating BPF filter on %v: '%v'", ifname, filter)
+	promisc := false
+	if runtime.GOOS == "solaris" {
+		promisc = true
 	}
-	handle, err := pcap.OpenLive(ifname, 65536, false, pcap.BlockForever)
+	if *debug_capture {
+		pstr := " "
+		if promisc {
+			pstr = " [promiscuous] "
+		}
+		log.Printf("[DEBUG] Activating BPF%sfilter on %v: '%v'", pstr, ifname, filter)
+	}
+	handle, err := pcap.OpenLive(ifname, 65536, promisc, pcap.BlockForever)
 	if err != nil {
 		log.Fatal("error opening pcap handle: ", err)
 	}
@@ -147,7 +157,9 @@ func Capture() {
 		select {
 		case <-ticker:
 			stats, _ := handle.Stats()
-			log.Printf("flushing all streams that haven't seen packets, pcap stats: %+v", stats)
+			if *debug_capture {
+				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
+			}
 			for _, assembly := range portAssemblerMap {
 				assembly.in.FlushOlderThan(time.Now().Add(flushDuration))
 				assembly.out.FlushOlderThan(time.Now().Add(flushDuration))
