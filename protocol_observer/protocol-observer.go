@@ -19,6 +19,15 @@ type regflag struct{}
 func (r *regflag) String() string {
 	return "complex multiple values"
 }
+
+type wiring struct {
+	proto  string
+	port   layers.TCPPort
+	config *string
+}
+
+var wirings []wiring = make([]wiring, 0, 1)
+
 func (r *regflag) Set(value string) error {
 	parts := strings.SplitN(value, ":", 3)
 	proto := parts[0]
@@ -34,11 +43,11 @@ func (r *regflag) Set(value string) error {
 	if len(parts) > 2 {
 		config = &parts[2]
 	}
-
-	if err := wirelatency.RegisterTCPPort(port, proto, config); err != nil {
-		log.Fatalf("Failed to register %v on port %v: %v", proto, port, err)
-	}
-
+	wirings = append(wirings, wiring{
+		proto:  proto,
+		port:   port,
+		config: config,
+	})
 	return nil
 }
 
@@ -89,6 +98,11 @@ func main() {
 		wirelatency.SetMetrics(metrics)
 	}
 
+	for _, w := range wirings {
+		if err := wirelatency.RegisterTCPPort(w.port, w.proto, w.config); err != nil {
+			log.Fatalf("Failed to register %v on port %v: %v", w.proto, w.port, err)
+		}
+	}
 	prots := wirelatency.Protocols()
 	mapping := wirelatency.PortMap()
 	if len(mapping) == 0 {
@@ -102,7 +116,7 @@ func main() {
 	}
 	for port, twa := range mapping {
 		config := (*twa).Config
-		if ! *quiet {
+		if !*quiet {
 			if config == nil {
 				log.Printf("\t*:%v -> %v", port, (*twa.Proto()).Name())
 			} else {
