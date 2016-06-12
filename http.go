@@ -81,6 +81,11 @@ func (p *httpParser) process() {
 	}
 }
 func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
+	var config interface{}
+	factory := stream.factory
+	if factory != nil {
+		config = factory.config
+	}
 	r_in := bufio.NewReader(stream.in.reader)
 	for {
 		var req *http.Request
@@ -96,9 +101,13 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 			if *debug_wl_http {
 				log.Println("[DEBUG] Body contains", nbytes, "bytes")
 			}
+			path := "unknown"
+			if req.URL != nil {
+				path = req.URL.Path
+			}
 			p.l.Lock()
 			p.reqinfo = append(p.reqinfo, &httpReqInfo{
-				name:   UrlMatch((*stream.factory).config, req.URL.Path),
+				name:   UrlMatch(config, path),
 				method: req.Method,
 				start:  p.last_in,
 				size:   nbytes,

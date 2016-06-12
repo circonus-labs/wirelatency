@@ -7,6 +7,7 @@ import (
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"log"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -18,6 +19,7 @@ type tcpStreamFactory struct {
 	n_clients     int64
 	n_sessions    int64
 	config        interface{}
+	cleanup       chan *tcpTwoWayStream
 }
 
 const (
@@ -39,6 +41,8 @@ type tcpStream struct {
 	bytes, packets, outOfOrder, skipped int64
 	start, end                          time.Time
 	sawStart, sawEnd                    bool
+	reader_mu                           sync.Mutex
+	readerDone                          bool
 	reader                              *tcpreader.ReaderStream
 	parent                              *tcpTwoWayStream
 }
@@ -52,6 +56,24 @@ func isLocalDst(e gopacket.Endpoint) bool {
 	}
 	is_mine, _ := localAddresses[e]
 	return is_mine
+}
+func (factory *tcpStreamFactory) doCleanup() {
+	for {
+		twa := <-factory.cleanup
+		if *debug_capture {
+			log.Printf("[DEBUG] cleanup two %v", twa)
+		}
+		if !factory.useReaders {
+			if twa.in != nil {
+				twa.in.parent = nil
+			}
+			twa.in = nil
+			if twa.out != nil {
+				twa.out.parent = nil
+			}
+			twa.out = nil
+		}
+	}
 }
 func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
 	inbound := transport.Dst().String() == strconv.Itoa(int(factory.port)) && isLocalDst(net.Dst())
@@ -108,6 +130,10 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
 				}
+				parent.in = nil
+				s.reader = nil
+				s.parent = nil
+				factory.cleanup <- parent
 			}()
 		}
 		return s
@@ -135,13 +161,17 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
 			}
+			parent.out = nil
+			s.reader = nil
+			s.parent = nil
+			factory.cleanup <- parent
 		}()
 	}
 	return s
 }
 
 func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
-	if s.parent.state == sessionStateBad {
+	if s.parent == nil || s.parent.state == sessionStateBad {
 		if *debug_capture {
 			log.Printf("[DEBUG] %v:%v in bad state", s.net, s.transport)
 		}
@@ -194,27 +224,40 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		s.sawEnd = s.sawEnd || reassembly.End
 	}
 
-	if s.reader != nil {
+	s.reader_mu.Lock()
+	if s.reader != nil && !s.readerDone {
 		s.reader.Reassembled(reassemblies)
 	}
+	s.reader_mu.Unlock()
 }
 func (s *tcpStream) ReassemblyComplete() {
 	if dsess, ok := sessions[s.net]; ok {
 		if parent, ok := dsess[s.transport]; ok {
+			factory := parent.factory
 			if *debug_capture {
 				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
 			}
-			if parent.in != nil && parent.in.reader != nil {
-				atomic.AddInt64(&parent.factory.n_sessions, -1)
-				parent.in.reader.ReassemblyComplete()
-				parent.in.reader = nil
+			if in := parent.in; in != nil {
+				if reader := in.reader; reader != nil {
+					atomic.AddInt64(&factory.n_sessions, -1)
+					in.reader_mu.Lock()
+					in.readerDone = true
+					reader.ReassemblyComplete()
+					in.reader_mu.Unlock()
+				}
 			}
-			if parent.out != nil && parent.out.reader != nil {
-				parent.out.reader.ReassemblyComplete()
-				parent.out.reader = nil
+			if out := parent.out; out != nil {
+				if reader := out.reader; reader != nil {
+					out.reader_mu.Lock()
+					out.readerDone = true
+					reader.ReassemblyComplete()
+					out.reader_mu.Unlock()
+				}
 			}
+			delete(dsess, s.transport)
+			parent.factory = nil
+			factory.cleanup <- parent
 		}
-		delete(dsess, s.transport)
 		if len(dsess) == 0 {
 			if *debug_capture {
 				log.Printf("[DEBUG] removing session: %v:%v", s.net, s.transport)
@@ -255,6 +298,7 @@ func (p *TCPProtocol) Factory(port layers.TCPPort, config *string) tcpassembly.S
 		useReaders:    p.useReaders,
 		interpFactory: &p.interpFactory,
 		config:        p.Config(config),
+		cleanup:       make(chan *tcpTwoWayStream, 10),
 	}
 	if metrics != nil {
 		base := p.Name() + "`" + port.String()
@@ -263,5 +307,6 @@ func (p *TCPProtocol) Factory(port layers.TCPPort, config *string) tcpassembly.S
 		metrics.SetGaugeFunc(base+"`active_sessions",
 			func() int64 { return factory.n_sessions })
 	}
+	go factory.doCleanup()
 	return factory
 }
