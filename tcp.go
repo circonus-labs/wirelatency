@@ -29,10 +29,11 @@ const (
 )
 
 type tcpTwoWayStream struct {
-	factory *tcpStreamFactory
-	interp  *TCPProtocolInterpreter
-	in, out *tcpStream
-	state   int
+	factory          *tcpStreamFactory
+	interp           *TCPProtocolInterpreter
+	in, out          *tcpStream
+	state            int
+	cleanupCondition chan bool
 }
 
 type tcpStream struct {
@@ -45,6 +46,8 @@ type tcpStream struct {
 	readerDone                          bool
 	reader                              *tcpreader.ReaderStream
 	parent                              *tcpTwoWayStream
+}
+type noopTcpStream struct {
 }
 
 var sessions = make(map[gopacket.Flow]map[gopacket.Flow]*tcpTwoWayStream)
@@ -61,22 +64,41 @@ func (factory *tcpStreamFactory) doCleanup() {
 	for {
 		twa := <-factory.cleanup
 		if *debug_capture {
-			log.Printf("[DEBUG] cleanup two %v", twa)
+			log.Printf("[DEBUG] cleanup waiting on in side %v", twa)
 		}
-		if !factory.useReaders {
-			if twa.in != nil {
-				twa.in.parent = nil
-			}
-			twa.in = nil
-			if twa.out != nil {
-				twa.out.parent = nil
-			}
-			twa.out = nil
+		<-twa.cleanupCondition // the in side
+		if *debug_capture {
+			log.Printf("[DEBUG] cleanup waiting on out side %v", twa)
 		}
+		<-twa.cleanupCondition // the out side
+		if *debug_capture {
+			log.Printf("[DEBUG] cleanup %v", twa)
+		}
+		close(twa.cleanupCondition)
+		if twa.in != nil {
+			twa.in.parent = nil
+			twa.in.reader = nil
+		}
+		twa.in = nil
+		if twa.out != nil {
+			twa.out.parent = nil
+			twa.out.reader = nil
+		}
+		twa.out = nil
+		twa.factory = nil
+		twa.interp = nil
 	}
 }
 func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
 	inbound := transport.Dst().String() == strconv.Itoa(int(factory.port)) && isLocalDst(net.Dst())
+	if !inbound {
+		if !(transport.Src().String() == strconv.Itoa(int(factory.port)) && isLocalDst(net.Src())) {
+			if *debug_capture {
+				log.Printf("[DEBUG] discarding %v:%v", net, transport)
+			}
+			return &noopTcpStream{}
+		}
+	}
 	net_session := net
 	transport_session := transport
 	if !inbound {
@@ -101,6 +123,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		}
 		interp := (*factory.interpFactory).New()
 		parent = &tcpTwoWayStream{interp: &interp, factory: factory}
+		parent.cleanupCondition = make(chan bool, 2)
 		dsess[transport_session] = parent
 	}
 
@@ -130,11 +153,11 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
 				}
-				parent.in = nil
-				s.reader = nil
-				s.parent = nil
-				factory.cleanup <- parent
+				parent.cleanupCondition <- true
 			}()
+		} else {
+			s.readerDone = true
+			parent.cleanupCondition <- true
 		}
 		return s
 	}
@@ -161,13 +184,18 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
 			}
-			parent.out = nil
-			s.reader = nil
-			s.parent = nil
-			factory.cleanup <- parent
+			parent.cleanupCondition <- true
 		}()
+	} else {
+		s.readerDone = true
+		parent.cleanupCondition <- true
 	}
 	return s
+}
+
+func (s *noopTcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
+}
+func (s *noopTcpStream) ReassemblyComplete() {
 }
 
 func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
@@ -231,36 +259,45 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 	s.reader_mu.Unlock()
 }
 func (s *tcpStream) ReassemblyComplete() {
-	if dsess, ok := sessions[s.net]; ok {
-		if parent, ok := dsess[s.transport]; ok {
+	net_session := s.net
+	transport_session := s.transport
+	if !s.inbound {
+		net_session = s.net.Reverse()
+		transport_session = s.transport.Reverse()
+	}
+
+	if dsess, ok := sessions[net_session]; ok {
+		if parent, ok := dsess[transport_session]; ok {
 			factory := parent.factory
 			if *debug_capture {
 				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
 			}
-			if in := parent.in; in != nil {
-				if reader := in.reader; reader != nil {
-					atomic.AddInt64(&factory.n_sessions, -1)
-					in.reader_mu.Lock()
-					in.readerDone = true
-					reader.ReassemblyComplete()
-					in.reader_mu.Unlock()
-				}
+			if s == parent.in {
+				atomic.AddInt64(&factory.n_sessions, -1)
 			}
-			if out := parent.out; out != nil {
-				if reader := out.reader; reader != nil {
-					out.reader_mu.Lock()
-					out.readerDone = true
-					reader.ReassemblyComplete()
-					out.reader_mu.Unlock()
+			if reader := s.reader; reader != nil {
+				if *debug_capture {
+					log.Printf("[DEBUG] reassembly complete (inbound: %v): %v:%v", s.inbound, s.net, s.transport)
 				}
+				s.reader_mu.Lock()
+				s.readerDone = true
+				reader.ReassemblyComplete()
+				s.reader_mu.Unlock()
 			}
-			delete(dsess, s.transport)
-			parent.factory = nil
-			factory.cleanup <- parent
+			if (parent.in == nil || parent.in.readerDone) &&
+				(parent.out == nil || parent.out.readerDone) {
+				if *debug_capture {
+					log.Printf("[DEBUG] %+v", parent.in)
+					log.Printf("[DEBUG] %+v", parent.out)
+					log.Printf("[DEBUG] removing sub session: %v:%v", s.net, s.transport)
+				}
+				delete(dsess, s.transport)
+				factory.cleanup <- parent
+			}
 		}
 		if len(dsess) == 0 {
 			if *debug_capture {
-				log.Printf("[DEBUG] removing session: %v:%v", s.net, s.transport)
+				log.Printf("[DEBUG] removing session: %v", s.net)
 			}
 			delete(sessions, s.net)
 		}
