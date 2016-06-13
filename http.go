@@ -41,9 +41,9 @@ type httpParser struct {
 	l             sync.Mutex
 	reqinfo       []*httpReqInfo
 	respinfo      []*httpRespInfo
-	current_start time.Time
 	last_in       time.Time
 	ta_firstbyte  time.Time
+	ta_lastbyte   time.Time
 }
 
 func (p *httpParser) InBytes(seen time.Time, data []byte) bool {
@@ -56,9 +56,8 @@ func (p *httpParser) OutBytes(seen time.Time, data []byte) bool {
 	}
 	p.l.Lock()
 	defer p.l.Unlock()
-	if p.ta_firstbyte.Before(p.current_start) {
-		p.ta_firstbyte = seen
-	} else if p.ta_firstbyte.Before(p.last_in) {
+     p.ta_lastbyte = seen
+	if p.ta_firstbyte.Before(p.last_in) {
 		p.ta_firstbyte = seen
 	}
 	return true
@@ -134,11 +133,13 @@ func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
 			ta_firstbyte := p.ta_firstbyte
 			p.l.Unlock()
 			nbytes := tcpreader.DiscardBytesToEOF(resp.Body)
+			p.l.Lock()
+			ta_lastbyte := p.ta_lastbyte
+			p.l.Unlock()
 			resp.Body.Close()
 			if *debug_wl_http {
 				log.Println("[DEBUG] Body contains", nbytes, "bytes")
 			}
-			now := time.Now()
 			status_name := "xxx"
 			switch {
 			case resp.StatusCode >= 0 && resp.StatusCode < 100:
@@ -159,7 +160,7 @@ func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
 				status_name:  status_name,
 				size:         nbytes,
 				ta_firstbyte: ta_firstbyte,
-				end:          now,
+				end:          ta_lastbyte,
 			})
 			p.l.Unlock()
 
