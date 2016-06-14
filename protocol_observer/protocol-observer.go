@@ -8,10 +8,12 @@ import (
 	"github.com/circonus-labs/wirelatency"
 	"github.com/google/gopacket/layers"
 	"net"
+	"net/http"
 	"log"
 	"os"
 	"strconv"
 	"strings"
+	_ "net/http/pprof"
 )
 
 var version string = "0.0.3"
@@ -77,6 +79,7 @@ var instanceid = flag.String("instanceid", "", "This machine's unique identifier
 var submissionurl = flag.String("submissionurl", "", "Optional HTTPTrap URL")
 var checkid = flag.Int("checkid", 0, "The Circonus check ID (not bundle id)")
 var brokergroupid = flag.Int("brokergroupid", 0, "The broker group id")
+var pprofNet = flag.Int("pprof_net", 0, "Port on which to listen for pprof")
 
 //var brokertag = flag.String("brokertag", "", "The broker tag for selection")
 
@@ -91,6 +94,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	if *pprofNet > 0 {
+		go func() {
+			http.ListenAndServe("localhost:" + strconv.Itoa(*pprofNet), nil)
+		}()
+	}
 	if *apitoken == "" {
 		log.Printf("No Circonus API Token specified, no reporting will happen.")
 	} else {

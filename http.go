@@ -38,12 +38,12 @@ type httpRespInfo struct {
 	end          time.Time
 }
 type httpParser struct {
-	l             sync.Mutex
-	reqinfo       []*httpReqInfo
-	respinfo      []*httpRespInfo
-	last_in       time.Time
-	ta_firstbyte  time.Time
-	ta_lastbyte   time.Time
+	l            sync.Mutex
+	reqinfo      []*httpReqInfo
+	respinfo     []*httpRespInfo
+	last_in      time.Time
+	ta_firstbyte time.Time
+	ta_lastbyte  time.Time
 }
 
 func (p *httpParser) InBytes(seen time.Time, data []byte) bool {
@@ -56,7 +56,7 @@ func (p *httpParser) OutBytes(seen time.Time, data []byte) bool {
 	}
 	p.l.Lock()
 	defer p.l.Unlock()
-     p.ta_lastbyte = seen
+	p.ta_lastbyte = seen
 	if p.ta_firstbyte.Before(p.last_in) {
 		p.ta_firstbyte = seen
 	}

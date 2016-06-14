@@ -33,7 +33,7 @@ type tcpTwoWayStream struct {
 	interp           *TCPProtocolInterpreter
 	in, out          *tcpStream
 	state            int
-	cleanupCondition chan bool
+	cleanupCondition chan string
 }
 
 type tcpStream struct {
@@ -62,31 +62,31 @@ func isLocalDst(e gopacket.Endpoint) bool {
 }
 func (factory *tcpStreamFactory) doCleanup() {
 	for {
-		twa := <-factory.cleanup
-		if *debug_capture {
-			log.Printf("[DEBUG] cleanup waiting on in side %v", twa)
-		}
-		<-twa.cleanupCondition // the in side
-		if *debug_capture {
-			log.Printf("[DEBUG] cleanup waiting on out side %v", twa)
-		}
-		<-twa.cleanupCondition // the out side
-		if *debug_capture {
-			log.Printf("[DEBUG] cleanup %v", twa)
-		}
-		close(twa.cleanupCondition)
-		if twa.in != nil {
-			twa.in.parent = nil
-			twa.in.reader = nil
-		}
-		twa.in = nil
-		if twa.out != nil {
-			twa.out.parent = nil
-			twa.out.reader = nil
-		}
-		twa.out = nil
-		twa.factory = nil
-		twa.interp = nil
+		tofree := <-factory.cleanup
+		go func(twa *tcpTwoWayStream) {
+			if *debug_capture {
+				log.Printf("[DEBUG] cleaning up %v", twa)
+			}
+			for i := 0; i < 2; i++ {
+				part := <-twa.cleanupCondition // the in side
+				if *debug_capture {
+					log.Printf("[DEBUG] %v cleaned up %v", twa, part)
+				}
+			}
+			close(twa.cleanupCondition)
+			if twa.in != nil {
+				twa.in.parent = nil
+				twa.in.reader = nil
+			}
+			twa.in = nil
+			if twa.out != nil {
+				twa.out.parent = nil
+				twa.out.reader = nil
+			}
+			twa.out = nil
+			twa.factory = nil
+			twa.interp = nil
+		}(tofree)
 	}
 }
 func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
@@ -106,6 +106,9 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		transport_session = transport.Reverse()
 	}
 
+	if *debug_capture {
+		log.Printf("[DEBUG] New(%v, %v)\n", net, transport)
+	}
 	// Setup the two level session hash
 	// session[localnet:remotenet][localport:remoteport] -> &tcpTwoWayStream
 	dsess, ok := sessions[net_session]
@@ -123,11 +126,20 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		}
 		interp := (*factory.interpFactory).New()
 		parent = &tcpTwoWayStream{interp: &interp, factory: factory}
-		parent.cleanupCondition = make(chan bool, 2)
+		parent.cleanupCondition = make(chan string, 2)
 		dsess[transport_session] = parent
 	}
 
+	// We can't very will have new streams where we have old streams.
+	if inbound && parent.in != nil {
+		return &noopTcpStream{}
+	}
+	if !inbound && parent.out != nil {
+		return &noopTcpStream{}
+	}
+
 	// Handle the inbound initial session startup
+	interp := *parent.interp
 	if inbound {
 		if *debug_capture {
 			log.Printf("[DEBUG] new inbound TCP stream %v:%v started, paired: %v", net_session, transport_session, parent.out != nil)
@@ -149,15 +161,15 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		s.end = s.start
 		if factory.useReaders {
 			go func() {
-				(*parent.interp).ManageIn(parent)
+				interp.ManageIn(parent)
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
 				}
-				parent.cleanupCondition <- true
+				parent.cleanupCondition <- "in async"
 			}()
 		} else {
 			s.readerDone = true
-			parent.cleanupCondition <- true
+			parent.cleanupCondition <- "in immediate"
 		}
 		return s
 	}
@@ -180,15 +192,15 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 	parent.out = s
 	if factory.useReaders {
 		go func() {
-			(*parent.interp).ManageOut(parent)
+			interp.ManageOut(parent)
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
 			}
-			parent.cleanupCondition <- true
+			parent.cleanupCondition <- "out async"
 		}()
 	} else {
 		s.readerDone = true
-		parent.cleanupCondition <- true
+		parent.cleanupCondition <- "out immediate"
 	}
 	return s
 }
@@ -203,6 +215,12 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		if *debug_capture {
 			log.Printf("[DEBUG] %v:%v in bad state", s.net, s.transport)
 		}
+		s.reader_mu.Lock()
+		if s.reader != nil && !s.readerDone {
+			s.readerDone = true
+			s.reader.ReassemblyComplete()
+		}
+		s.reader_mu.Unlock()
 		return
 	}
 	direction := "outbound"
@@ -266,40 +284,35 @@ func (s *tcpStream) ReassemblyComplete() {
 		transport_session = s.transport.Reverse()
 	}
 
+	if reader := s.reader; reader != nil {
+		if *debug_capture {
+			log.Printf("[DEBUG] reassembly complete (inbound: %v): %v:%v", s.inbound, s.net, s.transport)
+		}
+		s.reader_mu.Lock()
+		if !s.readerDone {
+			s.readerDone = true
+			reader.ReassemblyComplete()
+		}
+		s.reader_mu.Unlock()
+	}
 	if dsess, ok := sessions[net_session]; ok {
 		if parent, ok := dsess[transport_session]; ok {
 			factory := parent.factory
-			if *debug_capture {
-				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
-			}
 			if s == parent.in {
 				atomic.AddInt64(&factory.n_sessions, -1)
 			}
-			if reader := s.reader; reader != nil {
-				if *debug_capture {
-					log.Printf("[DEBUG] reassembly complete (inbound: %v): %v:%v", s.inbound, s.net, s.transport)
-				}
-				s.reader_mu.Lock()
-				s.readerDone = true
-				reader.ReassemblyComplete()
-				s.reader_mu.Unlock()
+			if *debug_capture {
+				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
+				log.Printf("[DEBUG] removing sub session: %v:%v", s.net, s.transport)
 			}
-			if (parent.in == nil || parent.in.readerDone) &&
-				(parent.out == nil || parent.out.readerDone) {
-				if *debug_capture {
-					log.Printf("[DEBUG] %+v", parent.in)
-					log.Printf("[DEBUG] %+v", parent.out)
-					log.Printf("[DEBUG] removing sub session: %v:%v", s.net, s.transport)
-				}
-				delete(dsess, s.transport)
-				factory.cleanup <- parent
-			}
+			delete(dsess, transport_session)
+			factory.cleanup <- parent
 		}
 		if len(dsess) == 0 {
 			if *debug_capture {
 				log.Printf("[DEBUG] removing session: %v", s.net)
 			}
-			delete(sessions, s.net)
+			delete(sessions, net_session)
 		}
 	}
 }
