@@ -29,11 +29,12 @@ const (
 )
 
 type tcpTwoWayStream struct {
-	factory          *tcpStreamFactory
-	interp           *TCPProtocolInterpreter
-	in, out          *tcpStream
-	state            int
-	cleanupCondition chan string
+	factory               *tcpStreamFactory
+	interp                *TCPProtocolInterpreter
+	inCreated, outCreated bool
+	in, out               *tcpStream
+	state                 int
+	cleanupCondition      chan string
 }
 
 type tcpStream struct {
@@ -67,8 +68,14 @@ func (factory *tcpStreamFactory) doCleanup() {
 			if *debug_capture {
 				log.Printf("[DEBUG] cleaning up %v", twa)
 			}
-			for i := 0; i < 2; i++ {
-				part := <-twa.cleanupCondition // the in side
+			if twa.inCreated {
+				part := <-twa.cleanupCondition
+				if *debug_capture {
+					log.Printf("[DEBUG] %v cleaned up %v", twa, part)
+				}
+			}
+			if twa.outCreated {
+				part := <-twa.cleanupCondition
 				if *debug_capture {
 					log.Printf("[DEBUG] %v cleaned up %v", twa, part)
 				}
@@ -157,6 +164,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			r := tcpreader.NewReaderStream()
 			s.reader = &r
 		}
+		parent.inCreated = true
 		parent.in = s
 		s.end = s.start
 		if factory.useReaders {
@@ -189,6 +197,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		r := tcpreader.NewReaderStream()
 		s.reader = &r
 	}
+	parent.outCreated = true
 	parent.out = s
 	if factory.useReaders {
 		go func() {
