@@ -1,6 +1,7 @@
 package wirelatency
 
 import (
+	"container/list"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/tcpassembly"
@@ -19,6 +20,7 @@ type tcpStreamFactory struct {
 	n_sessions    int64
 	config        interface{}
 	cleanup       chan *tcpTwoWayStream
+	cleanupList   *list.List
 }
 
 const (
@@ -33,7 +35,7 @@ type tcpTwoWayStream struct {
 	inCreated, outCreated bool
 	in, out               *tcpStream
 	state                 int
-	cleanupCondition      chan string
+	cleanupIn, cleanupOut chan bool
 }
 
 type tcpStream struct {
@@ -58,39 +60,65 @@ func isLocalDst(e gopacket.Endpoint) bool {
 	is_mine, _ := localAddresses[e]
 	return is_mine
 }
-func (factory *tcpStreamFactory) doCleanup() {
-	for {
-		tofree := <-factory.cleanup
-		go func(twa *tcpTwoWayStream) {
+func (twa *tcpTwoWayStream) release() bool {
+	if twa.inCreated {
+		select {
+		case <-twa.cleanupIn:
+			twa.inCreated = false
 			if *debug_capture {
-				log.Printf("[DEBUG] cleaning up %v", twa)
+				log.Printf("[DEBUG] %v cleaned up in", twa)
 			}
-			if twa.inCreated {
-				part := <-twa.cleanupCondition
-				if *debug_capture {
-					log.Printf("[DEBUG] %v cleaned up %v", twa, part)
+		default:
+		}
+	}
+	if twa.outCreated {
+		select {
+		case <-twa.cleanupOut:
+			twa.outCreated = false
+			if *debug_capture {
+				log.Printf("[DEBUG] %v cleaned up out", twa)
+			}
+		default:
+		}
+	}
+
+	if !twa.inCreated && !twa.outCreated {
+		if twa.in != nil {
+			twa.in.parent = nil
+			twa.in.reader = nil
+		}
+		twa.in = nil
+		if twa.out != nil {
+			twa.out.parent = nil
+			twa.out.reader = nil
+		}
+		twa.out = nil
+		twa.factory = nil
+		twa.interp = nil
+		return true
+	}
+	return false
+}
+func (factory *tcpStreamFactory) doCleanup() {
+	timer := time.Tick(5 * time.Second)
+	for {
+		select {
+		case tofree := <-factory.cleanup:
+			if !tofree.release() {
+				factory.cleanupList.PushBack(tofree)
+			}
+
+		case <-timer:
+			var next *list.Element
+			var tofree *tcpTwoWayStream
+			for e := factory.cleanupList.Front(); e != nil; e = next {
+				next = e.Next()
+				tofree = e.Value.(*tcpTwoWayStream)
+				if tofree.release() {
+					factory.cleanupList.Remove(e)
 				}
 			}
-			if twa.outCreated {
-				part := <-twa.cleanupCondition
-				if *debug_capture {
-					log.Printf("[DEBUG] %v cleaned up %v", twa, part)
-				}
-			}
-			close(twa.cleanupCondition)
-			if twa.in != nil {
-				twa.in.parent = nil
-				twa.in.reader = nil
-			}
-			twa.in = nil
-			if twa.out != nil {
-				twa.out.parent = nil
-				twa.out.reader = nil
-			}
-			twa.out = nil
-			twa.factory = nil
-			twa.interp = nil
-		}(tofree)
+		}
 	}
 }
 func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
@@ -130,7 +158,8 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		}
 		interp := (*factory.interpFactory).New()
 		parent = &tcpTwoWayStream{interp: &interp, factory: factory}
-		parent.cleanupCondition = make(chan string, 2)
+		parent.cleanupIn = make(chan bool, 1)
+		parent.cleanupOut = make(chan bool, 1)
 		dsess[transport_session] = parent
 	}
 
@@ -173,10 +202,10 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
 				}
-				parent.cleanupCondition <- "in async"
+				close(parent.cleanupIn)
 			}()
 		} else {
-			parent.cleanupCondition <- "in immediate"
+			close(parent.cleanupIn)
 		}
 		return s
 	}
@@ -207,10 +236,10 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
 			}
-			parent.cleanupCondition <- "out async"
+			close(parent.cleanupOut)
 		}()
 	} else {
-		parent.cleanupCondition <- "out immediate"
+		close(parent.cleanupOut)
 	}
 	return s
 }
@@ -347,6 +376,7 @@ func (p *TCPProtocol) Factory(port layers.TCPPort, config *string) tcpassembly.S
 		interpFactory: &p.interpFactory,
 		config:        p.Config(config),
 		cleanup:       make(chan *tcpTwoWayStream, 10),
+		cleanupList:   list.New(),
 	}
 	if metrics != nil {
 		base := p.Name() + "`" + port.String()
