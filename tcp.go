@@ -7,7 +7,6 @@ import (
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"log"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -43,8 +42,6 @@ type tcpStream struct {
 	bytes, packets, outOfOrder, skipped int64
 	start, end                          time.Time
 	sawStart, sawEnd                    bool
-	reader_mu                           sync.Mutex
-	readerDone                          bool
 	reader                              *tcpreader.ReaderStream
 	parent                              *tcpTwoWayStream
 }
@@ -169,6 +166,9 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		s.end = s.start
 		if factory.useReaders {
 			go func() {
+				if *debug_capture {
+					log.Printf("[DEBUG] go ManageIn(%v:%v) started", s.net, s.transport)
+				}
 				interp.ManageIn(parent)
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
@@ -176,7 +176,6 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 				parent.cleanupCondition <- "in async"
 			}()
 		} else {
-			s.readerDone = true
 			parent.cleanupCondition <- "in immediate"
 		}
 		return s
@@ -201,6 +200,9 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 	parent.out = s
 	if factory.useReaders {
 		go func() {
+			if *debug_capture {
+				log.Printf("[DEBUG] go ManageOut(%v:%v) started", s.net, s.transport)
+			}
 			interp.ManageOut(parent)
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
@@ -208,7 +210,6 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			parent.cleanupCondition <- "out async"
 		}()
 	} else {
-		s.readerDone = true
 		parent.cleanupCondition <- "out immediate"
 	}
 	return s
@@ -224,12 +225,7 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		if *debug_capture {
 			log.Printf("[DEBUG] %v:%v in bad state", s.net, s.transport)
 		}
-		s.reader_mu.Lock()
-		if s.reader != nil && !s.readerDone {
-			s.readerDone = true
-			s.reader.ReassemblyComplete()
-		}
-		s.reader_mu.Unlock()
+		/* We know the session is borked, we can avoid reassembling */
 		return
 	}
 	direction := "outbound"
@@ -279,11 +275,9 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		s.sawEnd = s.sawEnd || reassembly.End
 	}
 
-	s.reader_mu.Lock()
-	if s.reader != nil && !s.readerDone {
+	if s.reader != nil {
 		s.reader.Reassembled(reassemblies)
 	}
-	s.reader_mu.Unlock()
 }
 func (s *tcpStream) ReassemblyComplete() {
 	net_session := s.net
@@ -297,12 +291,7 @@ func (s *tcpStream) ReassemblyComplete() {
 		if *debug_capture {
 			log.Printf("[DEBUG] reassembly complete (inbound: %v): %v:%v", s.inbound, s.net, s.transport)
 		}
-		s.reader_mu.Lock()
-		if !s.readerDone {
-			s.readerDone = true
-			reader.ReassemblyComplete()
-		}
-		s.reader_mu.Unlock()
+		s.reader.ReassemblyComplete()
 	}
 	if dsess, ok := sessions[net_session]; ok {
 		if parent, ok := dsess[transport_session]; ok {
