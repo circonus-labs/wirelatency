@@ -94,6 +94,7 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 			if *debug_wl_http {
 				log.Println("[DEBUG] Error parsing HTTP requests:", err)
 			}
+			return
 		} else {
 			req = newReq
 			nbytes, derr := tcpreader.DiscardBytesToFirstError(req.Body)
