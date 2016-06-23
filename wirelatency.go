@@ -98,6 +98,9 @@ func RegisterTCPPort(port layers.TCPPort, protocolName string, config *string) e
 	return nil
 }
 
+var flushAfter = flag.String("flush_after", "30s",
+	"Connections with gaps will have buffered packets flushed after this timeout")
+
 var iface = flag.String("iface", "auto", "Select the system interface to sniff")
 var debug_capture_data = flag.Bool("debug_capture_data", false, "Debug packet capture data")
 var debug_capture = flag.Bool("debug_capture", false, "Debug packet assembly")
@@ -143,6 +146,11 @@ func selectInterface() string {
 	return *iface
 }
 func Capture() {
+	flushDuration, err := time.ParseDuration(*flushAfter)
+	if err != nil {
+		log.Fatal("invalid flush duration: ", *flushAfter)
+	}
+
 	// Construct our BPF filter
 	filter := "tcp and ("
 	subsequent_or := ""
@@ -172,8 +180,6 @@ func Capture() {
 		log.Fatal("error setting BPF filter: ", err)
 	}
 
-	flushDuration := 2 * time.Minute
-
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packets := packetSource.Packets()
 	ticker := time.Tick(flushDuration)
@@ -186,7 +192,7 @@ func Capture() {
 				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
 			}
 			for _, twa := range portAssemblerMap {
-				twa.assembler.FlushOlderThan(time.Now().Add(flushDuration))
+				twa.assembler.FlushOlderThan(time.Now().Add(0 - flushDuration))
 			}
 
 		case packet := <-packets:

@@ -138,7 +138,8 @@ func main() {
 		for protocol, _ := range prots {
 			fmt.Printf("\t-wire %v\n", protocol)
 		}
-		fmt.Printf("\nplease specify at least one mapping.\n")
+		fmt.Printf("\nplease specify at least one wire mapping.\n")
+		fmt.Printf("\nUse -help for many more options.\n")
 		os.Exit(2)
 	}
 	for port, twa := range mapping {

@@ -202,6 +202,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
 				}
+				s.reader = nil
 				close(parent.cleanupIn)
 			}()
 		} else {
@@ -236,6 +237,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
 			}
+			s.reader = nil
 			close(parent.cleanupOut)
 		}()
 	} else {
