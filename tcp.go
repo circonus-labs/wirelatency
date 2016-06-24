@@ -388,7 +388,7 @@ func (p *TCPProtocol) Factory(port layers.TCPPort, config *string) tcpassembly.S
 		cleanup:       make(chan *tcpTwoWayStream, 10),
 		cleanupList:   list.New(),
 	}
-     if p.Config != nil {
+	if p.Config != nil {
 		factory.config = p.Config(config)
 	}
 	if metrics != nil {
