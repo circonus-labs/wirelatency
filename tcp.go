@@ -16,6 +16,7 @@ type tcpStreamFactory struct {
 	interpFactory *TCPProtocolInterpreterFactory
 	port          layers.TCPPort
 	useReaders    bool
+	inFlight      bool
 	n_clients     int64
 	n_sessions    int64
 	config        interface{}
@@ -265,16 +266,22 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 	}
 
 	for _, reassembly := range reassemblies {
-		if reassembly.Skip == 0 {
-			if s.parent.in == s {
+		if reassembly.Skip == 0 || (s.parent.factory.inFlight && reassembly.Skip < 0) {
+			if s.parent.in == s || s.parent.factory.inFlight {
 				if s.parent.state == sessionStateBlank {
 					s.parent.state = sessionStateGood
 				}
 			}
 		}
-		if reassembly.Skip < 0 {
+		if reassembly.Skip < 0 && s.parent.state != sessionStateGood {
+			if *debug_capture {
+				log.Printf("[DEBUG] %v skip: %v", direction, reassembly.Skip)
+			}
 			s.parent.state = sessionStateBad
 		} else if s.parent.state != sessionStateGood {
+			if *debug_capture {
+				log.Printf("[DEBUG] %v entering bad state [from %v]", direction, s.parent.state)
+			}
 			s.parent.state = sessionStateBad
 		}
 		if reassembly.Seen.Before(s.end) {
@@ -361,6 +368,7 @@ type TCPProtocol struct {
 	name          string
 	defaultPort   layers.TCPPort
 	useReaders    bool
+	inFlight      bool
 	interpFactory TCPProtocolInterpreterFactory
 	Config        configbuilder
 }
@@ -375,10 +383,13 @@ func (p *TCPProtocol) Factory(port layers.TCPPort, config *string) tcpassembly.S
 	factory := &tcpStreamFactory{
 		port:          port,
 		useReaders:    p.useReaders,
+		inFlight:      p.inFlight,
 		interpFactory: &p.interpFactory,
-		config:        p.Config(config),
 		cleanup:       make(chan *tcpTwoWayStream, 10),
 		cleanupList:   list.New(),
+	}
+     if p.Config != nil {
+		factory.config = p.Config(config)
 	}
 	if metrics != nil {
 		base := p.Name() + "`" + port.String()
