@@ -6,20 +6,19 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strconv"
+	"strings"
 	"time"
 )
 
 var debug_postgres = flag.Bool("debug_postgres", false, "Debug postgres reassembly")
 
-var pg_re map[string]*regexp.Regexp
+var pg_sql_wsp *regexp.Regexp
+var pg_dealloc_re *regexp.Regexp
 
 func init() {
-	pg_re = make(map[string]*regexp.Regexp)
-	pg_re["prepare"] = regexp.MustCompile("^\\s*(?i)\\bprepare\\b")
-	pg_re["insert"] = regexp.MustCompile("(?i)\\binsert\\b")
-	pg_re["update"] = regexp.MustCompile("(?i)\\bupdate\\b")
-	pg_re["delete"] = regexp.MustCompile("(?i)\\bdelete\\b")
-	pg_re["select"] = regexp.MustCompile("(?i)\\bselect\\b")
+	pg_sql_wsp = regexp.MustCompile("[\\r\\n\\s]+")
+	pg_dealloc_re = regexp.MustCompile("(?i)^\\s*DEALLOCATE\\s+(\\S+)")
 }
 
 const (
@@ -88,10 +87,12 @@ type postgres_frame struct {
 	response_rows  int
 }
 type postgres_Parser struct {
-	factory        *postgres_ParserFactory
-	stream         []postgres_frame
-	request_frame  postgres_frame
-	response_frame postgres_frame
+	factory          *postgres_ParserFactory
+	stream           []postgres_frame
+	request_frame    postgres_frame
+	response_frame   postgres_frame
+	prepared_queries map[string]string
+	portals          map[string]string
 }
 
 func postgres_frame_CommandName_B(code uint8) (string, bool) {
@@ -145,7 +146,7 @@ func postgres_frame_CommandName_B(code uint8) (string, bool) {
 	case pg_RowDescription_B:
 		return "RowDescription", true
 	}
-	return fmt.Sprintf("unknown: %c", code), false
+	return fmt.Sprintf("unknown:%d", code), false
 }
 func postgres_frame_CommandName_F(code uint8) (string, bool) {
 	switch code {
@@ -192,6 +193,12 @@ func (f *postgres_frame) CommandName() string {
 	name, _ := postgres_frame_CommandName_B(f.command)
 	return name
 }
+func (f *postgres_frame) copy() *postgres_frame {
+	f_copy := *f
+	f_copy.payload = make([]byte, len(f.payload), len(f.payload))
+	copy(f_copy.payload, f.payload)
+	return &f_copy
+}
 func (f *postgres_frame) validateIn() bool {
 	_, valid := postgres_frame_CommandName_F(f.command)
 	return valid
@@ -210,7 +217,7 @@ func (f *postgres_frame) init() {
 	f.response_rows = 0
 	f.response_bytes = 0
 	if f.payload == nil || cap(f.payload) != pg_retainedPayloadSize {
-		f.payload = make([]byte, pg_retainedPayloadSize, pg_retainedPayloadSize)
+		f.payload = make([]byte, 0, pg_retainedPayloadSize)
 	}
 	f.payload = f.payload[:0]
 }
@@ -271,9 +278,6 @@ func (f *postgres_frame) fillFrame(seen time.Time, data []byte) (complete bool, 
 		case 4:
 			f.length_bytes[3] = data[used]
 			f.length = binary.BigEndian.Uint32(f.length_bytes[:])
-			if *debug_postgres {
-				log.Printf("[DEBUG] [%v] new frame command '%v' len: %v", f.inbound, f.command, f.length)
-			}
 		}
 	}
 	if f.so_far < 5 {
@@ -337,23 +341,105 @@ func (p *postgres_Parser) flushStream() {
 	p.stream = make([]postgres_frame, 0, 2)
 }
 
+func pg_read_string(data []byte) (string, int) {
+	for i, c := range data {
+		if c == 0 {
+			return string(data[0:i]), i
+		}
+	}
+	return "", -1
+}
+func (p *postgres_Parser) bind(req, resp *postgres_frame) {
+	if req.command != pg_Bind_F {
+		if *debug_postgres {
+			log.Printf("[DEBUG] out-of-order %v->%v", req.CommandName(), resp.CommandName())
+		}
+	}
+	var name string
+	portal, plen := pg_read_string(req.payload)
+	if plen < 0 {
+		return
+	}
+	name, nlen := pg_read_string(req.payload[plen+1:])
+	if nlen < 0 {
+		return
+	}
+	p.portals[portal] = name
+}
+func (p *postgres_Parser) store(req, resp *postgres_frame) {
+	if req.command != pg_Parse_F {
+		if *debug_postgres {
+			log.Printf("[DEBUG] out-of-order %v->%v", req.CommandName(), resp.CommandName())
+		}
+	}
+	var name string
+	name, len := pg_read_string(req.payload)
+	if len >= 0 {
+		query, qlen := pg_read_string(req.payload[len+1:])
+		if qlen >= 0 {
+			p.prepared_queries[name] =
+				strings.TrimSpace(pg_sql_wsp.ReplaceAllLiteralString(query, " "))
+			if *debug_postgres {
+				log.Printf("PARSED[%v] %v", name, p.prepared_queries[name])
+			}
+		}
+	}
+}
 func (p *postgres_Parser) report(req, resp *postgres_frame) {
+	should_log := true
 	duration := resp.timestamp.Sub(req.timestamp)
 	name := req.CommandName()
 	types := make([]string, 1, 5)
 	types[0] = ""
-	if req.command == pg_Query_F {
-		for typename, re := range pg_re {
-			if re.Match(req.payload) {
-				types = append(types, "`"+typename)
+	result := ""
+	if resp.command == pg_CommandComplete_B {
+		var len int
+		if result, len = pg_read_string(resp.payload); len >= 0 {
+			if *debug_postgres {
+				log.Printf("[COMPLETE] %v", result)
 			}
 		}
 	}
-	for _, typename := range types {
-		wl_track_int64("bytes", int64(req.length), name+typename+"`request_bytes")
-		wl_track_int64("bytes", int64(req.response_bytes), name+typename+"`response_bytes")
-		wl_track_int64("tuples", int64(req.response_rows), name+typename+"`response_rows")
-		wl_track_float64("seconds", float64(duration)/1000000000.0, name+typename+"`latency")
+	switch req.command {
+	case pg_Parse_F:
+		should_log = false
+	case pg_Execute_F:
+		/*
+			if pname, len := pg_read_string(req.payload); len >=0 {
+				if portal, ok := p.portals[pname]; ok {
+					if query, ok := p.prepared_queries[portal]; ok {
+						name = "Execute`" + query
+					}
+				}
+			}
+		*/
+	case pg_Query_F:
+		if pname, len := pg_read_string(req.payload); len >= 0 {
+			if *debug_postgres {
+				log.Printf("QUERY[%v]", pname)
+			}
+			if m := pg_dealloc_re.FindStringSubmatch(pname); m != nil {
+				if *debug_postgres {
+					log.Printf("UNPARSE[%v]", m[1])
+				}
+				delete(p.prepared_queries, m[1])
+				should_log = false
+			}
+		}
+	}
+	if rfields := strings.Fields(result); rfields != nil && len(rfields) > 1 {
+		types = append(types, "`"+rfields[0])
+		if nrows, err := strconv.ParseInt(rfields[len(rfields)-1], 10, 32); err == nil {
+			req.response_rows = int(nrows)
+		}
+	}
+	if should_log {
+		for _, typename := range types {
+			wl_track_int64("bytes", int64(req.length), name+typename+"`request_bytes")
+			wl_track_int64("bytes", int64(req.response_bytes), name+typename+"`response_bytes")
+			wl_track_int64("tuples", int64(req.response_rows), name+typename+"`response_rows")
+			wl_track_float64("seconds", float64(duration)/1000000000.0, name+typename+"`latency")
+		}
 	}
 }
 func (p *postgres_Parser) reset() {
@@ -376,19 +462,35 @@ func (p *postgres_Parser) InBytes(seen time.Time, data []byte) bool {
 				continue
 			}
 			if !p.request_frame.validateIn() {
-				log.Printf("<- BAD FRAME: %v", p.request_frame.CommandName())
+				if *debug_postgres {
+					log.Printf("<- BAD FRAME: %v", p.request_frame.CommandName())
+				}
 				p.reset()
 				return true
 			}
-			frame := p.request_frame
-			if *debug_postgres {
-				log.Printf("<- %v [%v]", frame.CommandName(), frame.timestamp)
+			switch p.request_frame.command {
+			case pg_Bind_F:
+				fallthrough
+			case pg_Query_F:
+				fallthrough
+			case pg_Execute_F:
+				fallthrough
+			case pg_Parse_F:
+				if *debug_postgres {
+					log.Printf("<- %v queued", p.request_frame.CommandName())
+				}
+				p.pushStream(p.request_frame.copy())
+			default:
+				if *debug_postgres {
+					log.Printf("<- %v discard", p.request_frame.CommandName())
+				}
 			}
-			p.pushStream(&frame)
 			data = data[used:]
 			p.request_frame.init()
 		} else if used < 0 {
-			log.Printf("<- BAD READ IN: %v", used)
+			if *debug_postgres {
+				log.Printf("<- BAD READ IN: %v", used)
+			}
 			p.reset()
 			return true
 		} else if !complete {
@@ -418,7 +520,9 @@ func (p *postgres_Parser) OutBytes(seen time.Time, data []byte) bool {
 				continue
 			}
 			if !p.response_frame.validateOut() {
-				log.Printf("-> BAD FRAME: %v", p.request_frame.CommandName())
+				if *debug_postgres {
+					log.Printf("-> BAD FRAME: %v", p.request_frame.CommandName())
+				}
 				p.reset()
 				return true
 			}
@@ -428,27 +532,31 @@ func (p *postgres_Parser) OutBytes(seen time.Time, data []byte) bool {
 			}
 
 			if *debug_postgres {
-				log.Printf("-> %v [%v]", p.response_frame.CommandName(), p.response_frame.timestamp)
+				log.Printf("-> %v", p.response_frame.CommandName())
 			}
-			switch p.response_frame.command {
-			case pg_ReadyForQuery_B:
+			if p.response_frame.command == pg_ReadyForQuery_B {
 				p.flushStream()
 				req = nil
-			case pg_DataRow_B:
-				if req != nil {
+			}
+			if req != nil {
+				switch p.response_frame.command {
+				case pg_DataRow_B:
 					req.response_rows++
-				}
-			case pg_CommandComplete_B:
-				if req != nil {
-					req = p.popStream()
-					p.report(req, &p.response_frame)
+				case pg_BindComplete_B:
+					p.bind(p.popStream(), &p.response_frame)
+				case pg_ParseComplete_B:
+					p.store(p.popStream(), &p.response_frame)
+				case pg_CommandComplete_B:
+					p.report(p.popStream(), &p.response_frame)
 				}
 			}
 
 			data = data[used:]
 			p.response_frame.init()
 		} else if used < 0 {
-			log.Printf("-> BAD READ OUT: %v", used)
+			if *debug_postgres {
+				log.Printf("-> BAD READ OUT: %v", used)
+			}
 			p.reset()
 			return true
 		} else if !complete {
@@ -470,6 +578,8 @@ type postgres_ParserFactory struct {
 func (f *postgres_ParserFactory) New() TCPProtocolInterpreter {
 	p := postgres_Parser{}
 	p.factory = f
+	p.prepared_queries = make(map[string]string)
+	p.portals = make(map[string]string)
 	p.reset()
 	p.request_frame.first = true
 	return &p
