@@ -253,24 +253,29 @@ func (s *noopTcpStream) ReassemblyComplete() {
 }
 
 func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
-	if s.parent == nil || s.parent.state == sessionStateBad {
+	if s.parent == nil || s.parent.factory == nil || s.parent.state == sessionStateBad {
 		if *debug_capture {
 			log.Printf("[DEBUG] %v:%v in bad state", s.net, s.transport)
 		}
 		/* We know the session is borked, we can avoid reassembling */
 		return
 	}
+	inFlight := s.parent.factory.inFlight
 	direction := "outbound"
 	if s.inbound {
 		direction = "inbound"
 	}
 
 	for _, reassembly := range reassemblies {
-		if reassembly.Skip == 0 || (s.parent.factory.inFlight && reassembly.Skip < 0) {
-			if s.parent.in == s || s.parent.factory.inFlight {
+		if reassembly.Skip == 0 || (inFlight && reassembly.Skip < 0) {
+			in := s.parent.in
+			if s.parent != nil && (in == s || inFlight) {
 				if s.parent.state == sessionStateBlank {
 					s.parent.state = sessionStateGood
 				}
+			}
+			if s.parent == nil {
+				return
 			}
 		}
 		if reassembly.Skip < 0 && s.parent.state != sessionStateGood {
