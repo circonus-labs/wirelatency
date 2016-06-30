@@ -46,11 +46,11 @@ type httpParser struct {
 	ta_lastbyte  time.Time
 }
 
-func (p *httpParser) InBytes(seen time.Time, data []byte) bool {
+func (p *httpParser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	p.last_in = seen
 	return true
 }
-func (p *httpParser) OutBytes(seen time.Time, data []byte) bool {
+func (p *httpParser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	if len(data) < 0 {
 		return true
 	}

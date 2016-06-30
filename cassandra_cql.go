@@ -260,7 +260,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 	wl_track_int64("bytes", int64(resp.length), name+"`response_bytes")
 	wl_track_float64("seconds", float64(duration)/1000000000.0, name+"`latency")
 }
-func (p *cassandra_cql_Parser) InBytes(seen time.Time, data []byte) bool {
+func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	// build a request
 	for {
 		if len(data) == 0 {
@@ -277,7 +277,7 @@ func (p *cassandra_cql_Parser) InBytes(seen time.Time, data []byte) bool {
 		}
 	}
 }
-func (p *cassandra_cql_Parser) OutBytes(seen time.Time, data []byte) bool {
+func (p *cassandra_cql_Parser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	for {
 		if len(data) == 0 {
 			return true

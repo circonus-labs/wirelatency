@@ -7,13 +7,13 @@ import (
 	"github.com/circonus-labs/circonus-gometrics"
 	"github.com/circonus-labs/wirelatency"
 	"github.com/google/gopacket/layers"
+	"log"
 	"net"
 	"net/http"
-	"log"
+	_ "net/http/pprof"
 	"os"
 	"strconv"
 	"strings"
-	_ "net/http/pprof"
 )
 
 var version string = "0.0.3"
@@ -21,16 +21,16 @@ var version string = "0.0.3"
 type localip struct{}
 
 func (r *localip) String() string {
-    return "complex multiple values"
+	return "complex multiple values"
 }
 
 func (r *localip) Set(value string) error {
-    ip := net.ParseIP(value)
-    if ip == nil {
-	   return errors.New(fmt.Sprintf("Invalid IP address: %s\n", value))
-    }
-    wirelatency.AddLocalIP(ip)
-    return nil
+	ip := net.ParseIP(value)
+	if ip == nil {
+		return errors.New(fmt.Sprintf("Invalid IP address: %s\n", value))
+	}
+	wirelatency.AddLocalIP(ip)
+	return nil
 }
 
 type regflag struct{}
@@ -96,7 +96,7 @@ func main() {
 
 	if *pprofNet > 0 {
 		go func() {
-			http.ListenAndServe("localhost:" + strconv.Itoa(*pprofNet), nil)
+			http.ListenAndServe("localhost:"+strconv.Itoa(*pprofNet), nil)
 		}()
 	}
 	if *apitoken == "" {

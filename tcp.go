@@ -300,11 +300,11 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 				log.Printf("[DEBUG] %v %v", direction, reassembly.Bytes)
 			}
 			if s.parent.in == s {
-				if !(*s.parent.interp).InBytes(reassembly.Seen, reassembly.Bytes) {
+				if !(*s.parent.interp).InBytes(s.parent, reassembly.Seen, reassembly.Bytes) {
 					s.parent.state = sessionStateBad
 				}
 			} else {
-				if !(*s.parent.interp).OutBytes(reassembly.Seen, reassembly.Bytes) {
+				if !(*s.parent.interp).OutBytes(s.parent, reassembly.Seen, reassembly.Bytes) {
 					s.parent.state = sessionStateBad
 				}
 
@@ -361,8 +361,8 @@ func (s *tcpStream) ReassemblyComplete() {
 type TCPProtocolInterpreter interface {
 	ManageIn(stream *tcpTwoWayStream)
 	ManageOut(stream *tcpTwoWayStream)
-	InBytes(seen time.Time, bytes []byte) bool
-	OutBytes(seen time.Time, bytes []byte) bool
+	InBytes(stream *tcpTwoWayStream, seen time.Time, bytes []byte) bool
+	OutBytes(stream *tcpTwoWayStream, seen time.Time, bytes []byte) bool
 }
 type TCPProtocolInterpreterFactory interface {
 	New() TCPProtocolInterpreter

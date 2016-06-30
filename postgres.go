@@ -1,9 +1,13 @@
 package wirelatency
 
 import (
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"regexp"
 	"strconv"
@@ -15,6 +19,49 @@ var debug_postgres = flag.Bool("debug_postgres", false, "Debug postgres reassemb
 
 var pg_sql_wsp *regexp.Regexp
 var pg_dealloc_re *regexp.Regexp
+
+type queryMap struct {
+	query_re *regexp.Regexp
+	Query    string
+	Name     string
+}
+type postgresConfig struct {
+	AdhocStatements    []queryMap
+	PreparedStatements []queryMap
+}
+
+func postgresConfigParser(c *string) interface{} {
+	var config postgresConfig
+	config = postgresConfig{
+		PreparedStatements: make([]queryMap, 0),
+		AdhocStatements:    make([]queryMap, 0),
+	}
+	if c == nil {
+		var default_endpoints = make([]queryMap, 1)
+		default_endpoints[0] = queryMap{
+			Query: ".",
+			Name:  "",
+		}
+		config.PreparedStatements = default_endpoints
+	} else {
+		file, e := ioutil.ReadFile(*c)
+		if e != nil {
+			panic(e)
+		}
+		err := json.Unmarshal(file, &config)
+		if err != nil {
+			panic(err)
+		}
+	}
+	for i := 0; i < len(config.AdhocStatements); i++ {
+		config.AdhocStatements[i].query_re = regexp.MustCompile(config.AdhocStatements[i].Query)
+	}
+	for i := 0; i < len(config.PreparedStatements); i++ {
+		config.PreparedStatements[i].query_re = regexp.MustCompile(config.PreparedStatements[i].Query)
+	}
+
+	return config
+}
 
 func init() {
 	pg_sql_wsp = regexp.MustCompile("[\\r\\n\\s]+")
@@ -385,10 +432,11 @@ func (p *postgres_Parser) store(req, resp *postgres_frame) {
 		}
 	}
 }
-func (p *postgres_Parser) report(req, resp *postgres_frame) {
+func (p *postgres_Parser) report(config postgresConfig, req, resp *postgres_frame) {
 	should_log := true
 	duration := resp.timestamp.Sub(req.timestamp)
 	name := req.CommandName()
+	longname := ""
 	types := make([]string, 1, 5)
 	types[0] = ""
 	result := ""
@@ -404,15 +452,26 @@ func (p *postgres_Parser) report(req, resp *postgres_frame) {
 	case pg_Parse_F:
 		should_log = false
 	case pg_Execute_F:
-		/*
-			if pname, len := pg_read_string(req.payload); len >=0 {
-				if portal, ok := p.portals[pname]; ok {
-					if query, ok := p.prepared_queries[portal]; ok {
-						name = "Execute`" + query
+		if pname, len := pg_read_string(req.payload); len >= 0 {
+			if portal, ok := p.portals[pname]; ok {
+				if query, ok := p.prepared_queries[portal]; ok {
+					for _, qm := range config.PreparedStatements {
+						if qm.query_re.MatchString(query) {
+							if qm.Name == "RAW" {
+								longname = "Execute`" + query
+							} else if qm.Name == "SHA256" {
+								bsum := sha256.Sum256([]byte(query))
+								csum := hex.EncodeToString(bsum[:])
+								longname = "Execute`" + csum
+							} else if qm.Name != "" {
+								longname = "Execute`" + qm.Name
+							}
+							break
+						}
 					}
 				}
 			}
-		*/
+		}
 	case pg_Query_F:
 		if pname, len := pg_read_string(req.payload); len >= 0 {
 			if *debug_postgres {
@@ -424,6 +483,21 @@ func (p *postgres_Parser) report(req, resp *postgres_frame) {
 				}
 				delete(p.prepared_queries, m[1])
 				should_log = false
+			} else {
+				for _, qm := range config.AdhocStatements {
+					if qm.query_re.MatchString(pname) {
+						if qm.Name == "RAW" {
+							longname = "Query`" + pname
+						} else if qm.Name == "SHA256" {
+							bsum := sha256.Sum256([]byte(pname))
+							csum := hex.EncodeToString(bsum[:])
+							longname = "Query`" + csum
+						} else if qm.Name != "" {
+							longname = "Query`" + qm.Name
+						}
+						break
+					}
+				}
 			}
 		}
 	}
@@ -440,6 +514,12 @@ func (p *postgres_Parser) report(req, resp *postgres_frame) {
 			wl_track_int64("tuples", int64(req.response_rows), name+typename+"`response_rows")
 			wl_track_float64("seconds", float64(duration)/1000000000.0, name+typename+"`latency")
 		}
+		if longname != "" {
+			wl_track_int64("bytes", int64(req.length), longname+"`request_bytes")
+			wl_track_int64("bytes", int64(req.response_bytes), longname+"`response_bytes")
+			wl_track_int64("tuples", int64(req.response_rows), longname+"`response_rows")
+			wl_track_float64("seconds", float64(duration)/1000000000.0, longname+"`latency")
+		}
 	}
 }
 func (p *postgres_Parser) reset() {
@@ -448,7 +528,7 @@ func (p *postgres_Parser) reset() {
 	p.request_frame.inbound = true
 	p.response_frame.init()
 }
-func (p *postgres_Parser) InBytes(seen time.Time, data []byte) bool {
+func (p *postgres_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	// build a request
 	for {
 		if len(data) == 0 {
@@ -498,7 +578,7 @@ func (p *postgres_Parser) InBytes(seen time.Time, data []byte) bool {
 		}
 	}
 }
-func (p *postgres_Parser) OutBytes(seen time.Time, data []byte) bool {
+func (p *postgres_Parser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	for {
 		if len(data) == 0 {
 			return true
@@ -547,7 +627,7 @@ func (p *postgres_Parser) OutBytes(seen time.Time, data []byte) bool {
 				case pg_ParseComplete_B:
 					p.store(p.popStream(), &p.response_frame)
 				case pg_CommandComplete_B:
-					p.report(p.popStream(), &p.response_frame)
+					p.report(stream.factory.config.(postgresConfig), p.popStream(), &p.response_frame)
 				}
 			}
 
@@ -586,7 +666,12 @@ func (f *postgres_ParserFactory) New() TCPProtocolInterpreter {
 }
 func init() {
 	factory := &postgres_ParserFactory{}
-	postgresProt := &TCPProtocol{name: "postgres", defaultPort: 5432, inFlight: true}
+	postgresProt := &TCPProtocol{
+		name:        "postgres",
+		defaultPort: 5432,
+		inFlight:    true,
+		Config:      postgresConfigParser,
+	}
 	postgresProt.interpFactory = factory
 	RegisterTCPProtocol(postgresProt)
 }
