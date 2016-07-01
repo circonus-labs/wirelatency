@@ -339,14 +339,12 @@ func (s *tcpStream) ReassemblyComplete() {
 	if dsess, ok := sessions[net_session]; ok {
 		if parent, ok := dsess[transport_session]; ok {
 			factory := parent.factory
-			if s == parent.in {
-				atomic.AddInt64(&factory.n_sessions, -1)
-			}
 			if *debug_capture {
 				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
 				log.Printf("[DEBUG] removing sub session: %v:%v", s.net, s.transport)
 			}
 			delete(dsess, transport_session)
+			atomic.AddInt64(&factory.n_sessions, -1)
 			factory.cleanup <- parent
 		}
 		if len(dsess) == 0 {
