@@ -1,7 +1,7 @@
 # Circonus WireLatency
 
 These are go-based tools to sniff the wire and reconstruct various protocol
-sessions to extract various telemetry (namely latency) from trasnactions
+sessions to extract various telemetry (namely latency) from transactions
 within those sessions.
 
 For example, it can be used to track the latency of HTTP API endpoints.
