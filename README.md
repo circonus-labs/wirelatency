@@ -78,3 +78,17 @@ If name is an empty string, no query-specific recording is done.  If it is the
 string "RAW" then the whole query is jammed int he metric name.  If it is the
 string "SHA256" then a hex-encoded sha256 of the query is used.  Otherwise
 the literal string is used to build the metric name.
+
+### Kafka
+
+```
+protocol_observer -apitoken <token> -wire kafka:9093
+```
+
+This will listen for kafka traffic on the specified port (9092 by default).
+
+Message and protocol command latency is recorded as well as message and frame
+sizes.  All production "Produce" and consumption "Fetch" are tracked in
+`_aggregate` and by topic.  Messages in production and consumption are expanded
+(including gzip and snappy) to analyize for message timestamps (for latency) and
+uncompressed payload sizes.
