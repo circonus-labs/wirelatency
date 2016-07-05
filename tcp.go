@@ -14,6 +14,7 @@ import (
 
 type tcpStreamFactory struct {
 	interpFactory *TCPProtocolInterpreterFactory
+	name          string
 	port          layers.TCPPort
 	useReaders    bool
 	inFlight      bool
@@ -246,7 +247,12 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 	}
 	return s
 }
-
+func (f *tcpStreamFactory) Error(name string) {
+	if metrics != nil {
+		metricname := f.name + "`" + f.port.String() + "`error`" + name
+		metrics.Increment(metricname)
+	}
+}
 func (s *noopTcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 }
 func (s *noopTcpStream) ReassemblyComplete() {
@@ -384,6 +390,7 @@ func (p *TCPProtocol) DefaultPort() layers.TCPPort {
 }
 func (p *TCPProtocol) Factory(port layers.TCPPort, config *string) tcpassembly.StreamFactory {
 	factory := &tcpStreamFactory{
+		name:          p.Name(),
 		port:          port,
 		useReaders:    p.useReaders,
 		inFlight:      p.inFlight,
