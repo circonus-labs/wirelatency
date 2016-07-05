@@ -99,7 +99,9 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 			req = newReq
 			nbytes, derr := tcpreader.DiscardBytesToFirstError(req.Body)
 			if derr != nil && derr != io.EOF {
-				log.Println("[ERROR] error reading request body: %v", derr)
+				if *debug_wl_http {
+					log.Println("[DEBUG] error reading request body: %v", derr)
+				}
 				return
 			}
 			if *debug_wl_http {
@@ -139,7 +141,9 @@ func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
 			p.l.Unlock()
 			nbytes, derr := tcpreader.DiscardBytesToFirstError(resp.Body)
 			if derr != nil && derr != io.EOF {
-				log.Println("[ERROR] error reading http response body: %v", derr)
+				if *debug_wl_http {
+					log.Println("[DEBUG] error reading http response body: %v", derr)
+				}
 				return
 			}
 			p.l.Lock()
