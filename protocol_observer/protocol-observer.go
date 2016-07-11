@@ -80,8 +80,7 @@ var submissionurl = flag.String("submissionurl", "", "Optional HTTPTrap URL")
 var checkid = flag.Int("checkid", 0, "The Circonus check ID (not bundle id)")
 var brokergroupid = flag.Int("brokergroupid", 0, "The broker group id")
 var pprofNet = flag.Int("pprof_net", 0, "Port on which to listen for pprof")
-
-//var brokertag = flag.String("brokertag", "", "The broker tag for selection")
+var brokertag = flag.String("brokertag", "", "The broker tag for selection")
 
 func main() {
 	var localip_flag localip
@@ -102,27 +101,22 @@ func main() {
 	if *apitoken == "" {
 		log.Printf("No Circonus API Token specified, no reporting will happen.")
 	} else {
-		metrics := circonusgometrics.NewCirconusMetrics()
-		if *apihost != "" {
-			metrics.ApiHost = *apihost
+		cfg := &circonusgometrics.Config{}
+		cfg.CheckManager.Check.InstanceId = *instanceid
+		cfg.CheckManager.Check.SubmissionUrl = *submissionurl
+		cfg.CheckManager.Check.Id = *checkid
+		cfg.CheckManager.Broker.Id = *brokergroupid
+		cfg.CheckManager.Broker.SelectTag = *brokertag
+		cfg.CheckManager.Api.Url = *apihost
+		cfg.CheckManager.Api.Token.Key = *apitoken
+		cfg.Debug = *debug_circonus
+		metrics, err := circonusgometrics.NewCirconusMetrics(cfg)
+		if err != nil {
+			log.Printf("Error initializing Circonus metrics, no reporting will happen. (%v)", err)
+		} else {
+			metrics.Start()
+			wirelatency.SetMetrics(metrics)
 		}
-		if *instanceid != "" {
-			metrics.InstanceId = *instanceid
-		}
-		if *submissionurl != "" {
-			metrics.SubmissionUrl = *submissionurl
-		}
-		if *checkid > 0 {
-			metrics.CheckId = *checkid
-		}
-		if *brokergroupid > 0 {
-			metrics.BrokerGroupId = *brokergroupid
-		}
-		// if *brokertag != "" { metrics.BrokerSelectTag = *brokertag }
-		metrics.ApiToken = *apitoken
-		metrics.Debug = *debug_circonus
-		metrics.Start()
-		wirelatency.SetMetrics(metrics)
 	}
 
 	for _, w := range wirings {
