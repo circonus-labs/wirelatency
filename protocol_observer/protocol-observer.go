@@ -77,8 +77,8 @@ var apihost = flag.String("apihost", "", "Circonus API Hostname")
 var apitoken = flag.String("apitoken", "", "Circonus API Token")
 var instanceid = flag.String("instanceid", "", "This machine's unique identifier")
 var submissionurl = flag.String("submissionurl", "", "Optional HTTPTrap URL")
-var checkid = flag.Int("checkid", 0, "The Circonus check ID (not bundle id)")
-var brokergroupid = flag.Int("brokergroupid", 0, "The broker group id")
+var checkid = flag.String("checkid", "", "The Circonus check ID (not bundle id)")
+var brokergroupid = flag.String("brokergroupid", "", "The broker group id")
 var pprofNet = flag.Int("pprof_net", 0, "Port on which to listen for pprof")
 var brokertag = flag.String("brokertag", "", "The broker tag for selection")
 
@@ -102,13 +102,13 @@ func main() {
 		log.Printf("No Circonus API Token specified, no reporting will happen.")
 	} else {
 		cfg := &circonusgometrics.Config{}
-		cfg.CheckManager.Check.InstanceId = *instanceid
-		cfg.CheckManager.Check.SubmissionUrl = *submissionurl
-		cfg.CheckManager.Check.Id = *checkid
-		cfg.CheckManager.Broker.Id = *brokergroupid
+		cfg.CheckManager.Check.InstanceID = *instanceid
+		cfg.CheckManager.Check.SubmissionURL = *submissionurl
+		cfg.CheckManager.Check.ID = *checkid
+		cfg.CheckManager.Broker.ID = *brokergroupid
 		cfg.CheckManager.Broker.SelectTag = *brokertag
-		cfg.CheckManager.Api.Url = *apihost
-		cfg.CheckManager.Api.Token.Key = *apitoken
+		cfg.CheckManager.API.URL = *apihost
+		cfg.CheckManager.API.TokenKey = *apitoken
 		cfg.Debug = *debug_circonus
 		metrics, err := circonusgometrics.NewCirconusMetrics(cfg)
 		if err != nil {
