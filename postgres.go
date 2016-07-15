@@ -586,6 +586,11 @@ func (p *postgres_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data 
 	}
 }
 func (p *postgres_Parser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
+	var pgConfig postgresConfig
+	if stream == nil || stream.factory==nil || stream.factory.config == nil {
+		return false
+	}
+	pgConfig = stream.factory.config.(postgresConfig)
 	for {
 		if len(data) == 0 {
 			return true
@@ -634,7 +639,7 @@ func (p *postgres_Parser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data
 				case pg_ParseComplete_B:
 					p.store(p.popStream(), &p.response_frame)
 				case pg_CommandComplete_B:
-					p.report(stream.factory.config.(postgresConfig), p.popStream(), &p.response_frame)
+					p.report(pgConfig, p.popStream(), &p.response_frame)
 				}
 			}
 

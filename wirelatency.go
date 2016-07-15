@@ -4,10 +4,10 @@ import (
 	"errors"
 	"flag"
 	"github.com/circonus-labs/circonus-gometrics"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
-	"github.com/google/gopacket/tcpassembly"
+	"github.com/postwait/gopacket"
+	"github.com/postwait/gopacket/layers"
+	"github.com/postwait/gopacket/pcap"
+	"github.com/postwait/gopacket/tcpassembly"
 	"log"
 	"net"
 	"runtime"
@@ -98,9 +98,10 @@ func RegisterTCPPort(port layers.TCPPort, protocolName string, config *string) e
 	return nil
 }
 
-var flushAfter = flag.String("flush_after", "30s",
+var flushAfter = flag.String("flush_after", "5s",
 	"Connections with gaps will have buffered packets flushed after this timeout")
-
+var closeAfter = flag.String("close_after", "2m",
+	"Connections with gaps will closed and have buffered packets flushed after this timeout")
 var iface = flag.String("iface", "auto", "Select the system interface to sniff")
 var debug_capture_data = flag.Bool("debug_capture_data", false, "Debug packet capture data")
 var debug_capture = flag.Bool("debug_capture", false, "Debug packet assembly")
@@ -150,6 +151,10 @@ func Capture() {
 	if err != nil {
 		log.Fatal("invalid flush duration: ", *flushAfter)
 	}
+	closeDuration, err := time.ParseDuration(*closeAfter)
+	if err != nil {
+		log.Fatal("invalid close duration: ", *closeAfter)
+	}
 
 	// Construct our BPF filter
 	filter := "tcp and ("
@@ -182,18 +187,37 @@ func Capture() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packets := packetSource.Packets()
-	ticker := time.Tick(flushDuration)
+	flushTicker := time.Tick(flushDuration/2)
+	closeTicker := time.Tick(closeDuration/2)
+
+	wake_up_and_gc := make(chan bool, 1)
+	go (func () {
+		for {
+			if ok := <-wake_up_and_gc ; ! ok { break }
+			runtime.GC()
+		}
+	})()
 
 	for {
 		select {
-		case <-ticker:
-			stats, _ := handle.Stats()
+		case <-flushTicker:
 			if *debug_capture {
+				stats, _ := handle.Stats()
 				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
 			}
 			for _, twa := range portAssemblerMap {
-				twa.assembler.FlushOlderThan(time.Now().Add(0 - flushDuration))
+				twa.assembler.FlushNoCloseOlderThan(time.Now().Add(0 - flushDuration))
 			}
+
+		case <-closeTicker:
+			if *debug_capture {
+				stats, _ := handle.Stats()
+				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
+			}
+			for _, twa := range portAssemblerMap {
+				twa.assembler.FlushOlderThan(time.Now().Add(0 - closeDuration))
+			}
+			wake_up_and_gc <- true
 
 		case packet := <-packets:
 			if packet == nil {

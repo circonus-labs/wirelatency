@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"flag"
-	"github.com/google/gopacket/tcpassembly/tcpreader"
+	"github.com/postwait/gopacket/tcpassembly/tcpreader"
 	"io"
 	"io/ioutil"
 	"log"
