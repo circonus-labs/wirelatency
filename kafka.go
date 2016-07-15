@@ -558,7 +558,7 @@ func (p *kafka_Parser) validateOut(stream *tcpTwoWayStream, f *kafka_frame) bool
 	case kafka_ProduceRequest:
 		global_kafka_produce.throttle_time_ms = -1
 		var n_topics int32
-		if n_topics, used = kafka_read_int32(f.payload, used) ; used < 0 {
+		if n_topics, used = kafka_read_int32(f.payload, used); used < 0 {
 			stream.factory.Error("bad_packet")
 			return false
 		}
