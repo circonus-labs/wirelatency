@@ -266,6 +266,8 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		/* We know the session is borked, we can avoid reassembling */
 		return
 	}
+	parent := s.parent
+	in := parent.in
 	inFlight := s.parent.factory.inFlight
 	direction := "outbound"
 	if s.inbound {
@@ -274,26 +276,25 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 
 	for _, reassembly := range reassemblies {
 		if reassembly.Skip == 0 || (inFlight && reassembly.Skip < 0) {
-			in := s.parent.in
-			if s.parent != nil && (in == s || inFlight) {
-				if s.parent.state == sessionStateBlank {
-					s.parent.state = sessionStateGood
-				}
-			}
 			if s.parent == nil {
 				return
 			}
+			if s.parent != nil && (in == s || inFlight) {
+				if parent.state == sessionStateBlank {
+					parent.state = sessionStateGood
+				}
+			}
 		}
-		if reassembly.Skip < 0 && s.parent.state != sessionStateGood {
+		if reassembly.Skip < 0 && parent.state != sessionStateGood {
 			if *debug_capture {
 				log.Printf("[DEBUG] %v skip: %v", direction, reassembly.Skip)
 			}
-			s.parent.state = sessionStateBad
-		} else if s.parent.state != sessionStateGood {
+			parent.state = sessionStateBad
+		} else if parent.state != sessionStateGood {
 			if *debug_capture {
-				log.Printf("[DEBUG] %v entering bad state [from %v]", direction, s.parent.state)
+				log.Printf("[DEBUG] %v entering bad state [from %v]", direction, parent.state)
 			}
-			s.parent.state = sessionStateBad
+			parent.state = sessionStateBad
 		}
 		if reassembly.Seen.Before(s.end) {
 			s.outOfOrder++
@@ -301,17 +302,17 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 			s.end = reassembly.Seen
 		}
 		s.bytes += int64(len(reassembly.Bytes))
-		if s.parent.interp != nil {
+		if parent.interp != nil {
 			if *debug_capture_data {
 				log.Printf("[DEBUG] %v %v", direction, reassembly.Bytes)
 			}
-			if s.parent.in == s {
-				if !(*s.parent.interp).InBytes(s.parent, reassembly.Seen, reassembly.Bytes) {
-					s.parent.state = sessionStateBad
+			if in == s {
+				if !(*parent.interp).InBytes(parent, reassembly.Seen, reassembly.Bytes) {
+					parent.state = sessionStateBad
 				}
 			} else {
-				if !(*s.parent.interp).OutBytes(s.parent, reassembly.Seen, reassembly.Bytes) {
-					s.parent.state = sessionStateBad
+				if !(*parent.interp).OutBytes(parent, reassembly.Seen, reassembly.Bytes) {
+					parent.state = sessionStateBad
 				}
 
 			}
