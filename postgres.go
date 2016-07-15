@@ -130,6 +130,8 @@ type postgres_frame struct {
 
 	//
 	timestamp      time.Time
+	should_log     bool
+	longname       string
 	response_bytes int
 	response_rows  int
 }
@@ -242,8 +244,8 @@ func (f *postgres_frame) CommandName() string {
 }
 func (f *postgres_frame) copy() *postgres_frame {
 	f_copy := *f
-	f_copy.payload = make([]byte, len(f.payload), len(f.payload))
-	copy(f_copy.payload, f.payload)
+	// someone is going to squat on the payload, it's not ours anymore
+	f_copy.payload = nil
 	return &f_copy
 }
 func (f *postgres_frame) validateIn() bool {
@@ -263,6 +265,8 @@ func (f *postgres_frame) init() {
 	f.truncated = false
 	f.response_rows = 0
 	f.response_bytes = 0
+	f.should_log = false
+	f.longname = ""
 	if f.payload == nil || cap(f.payload) != pg_retainedPayloadSize {
 		f.payload = make([]byte, 0, pg_retainedPayloadSize)
 	}
@@ -432,25 +436,11 @@ func (p *postgres_Parser) store(req, resp *postgres_frame) {
 		}
 	}
 }
-func (p *postgres_Parser) report(config postgresConfig, req, resp *postgres_frame) {
-	should_log := true
-	duration := resp.timestamp.Sub(req.timestamp)
-	name := req.CommandName()
-	longname := ""
-	types := make([]string, 1, 5)
-	types[0] = ""
-	result := ""
-	if resp.command == pg_CommandComplete_B {
-		var len int
-		if result, len = pg_read_string(resp.payload); len >= 0 {
-			if *debug_postgres {
-				log.Printf("[COMPLETE] %v", result)
-			}
-		}
-	}
+func (p *postgres_Parser) extract(config postgresConfig, req *postgres_frame) {
+	req.should_log = true
 	switch req.command {
 	case pg_Parse_F:
-		should_log = false
+		req.should_log = false
 	case pg_Execute_F:
 		if pname, len := pg_read_string(req.payload); len >= 0 {
 			if portal, ok := p.portals[pname]; ok {
@@ -458,13 +448,13 @@ func (p *postgres_Parser) report(config postgresConfig, req, resp *postgres_fram
 					for _, qm := range config.PreparedStatements {
 						if qm.query_re.MatchString(query) {
 							if qm.Name == "RAW" {
-								longname = "Execute`" + query
+								req.longname = "Execute`" + query
 							} else if qm.Name == "SHA256" {
 								bsum := sha256.Sum256([]byte(query))
 								csum := hex.EncodeToString(bsum[:])
-								longname = "Execute`" + csum
+								req.longname = "Execute`" + csum
 							} else if qm.Name != "" {
-								longname = "Execute`" + qm.Name
+								req.longname = "Execute`" + qm.Name
 							}
 							break
 						}
@@ -482,22 +472,38 @@ func (p *postgres_Parser) report(config postgresConfig, req, resp *postgres_fram
 					log.Printf("UNPARSE[%v]", m[1])
 				}
 				delete(p.prepared_queries, m[1])
-				should_log = false
+				req.should_log = false
 			} else {
 				for _, qm := range config.AdhocStatements {
 					if qm.query_re.MatchString(pname) {
 						if qm.Name == "RAW" {
-							longname = "Query`" + pname
+							req.longname = "Query`" + pname
 						} else if qm.Name == "SHA256" {
 							bsum := sha256.Sum256([]byte(pname))
 							csum := hex.EncodeToString(bsum[:])
-							longname = "Query`" + csum
+							req.longname = "Query`" + csum
 						} else if qm.Name != "" {
-							longname = "Query`" + qm.Name
+							req.longname = "Query`" + qm.Name
 						}
 						break
 					}
 				}
+			}
+		}
+	}
+}
+func (p *postgres_Parser) report(config postgresConfig, req, resp *postgres_frame) {
+	should_log := req.should_log
+	name := req.CommandName()
+	duration := resp.timestamp.Sub(req.timestamp)
+	types := make([]string, 1, 5)
+	types[0] = ""
+	result := ""
+	if resp.command == pg_CommandComplete_B {
+		var len int
+		if result, len = pg_read_string(resp.payload); len >= 0 {
+			if *debug_postgres {
+				log.Printf("[COMPLETE] %v", result)
 			}
 		}
 	}
@@ -514,11 +520,11 @@ func (p *postgres_Parser) report(config postgresConfig, req, resp *postgres_fram
 			wl_track_int64("tuples", int64(req.response_rows), name+typename+"`response_rows")
 			wl_track_float64("seconds", float64(duration)/1000000000.0, name+typename+"`latency")
 		}
-		if longname != "" {
-			wl_track_int64("bytes", int64(req.length), longname+"`request_bytes")
-			wl_track_int64("bytes", int64(req.response_bytes), longname+"`response_bytes")
-			wl_track_int64("tuples", int64(req.response_rows), longname+"`response_rows")
-			wl_track_float64("seconds", float64(duration)/1000000000.0, longname+"`latency")
+		if req.longname != "" {
+			wl_track_int64("bytes", int64(req.length), req.longname+"`request_bytes")
+			wl_track_int64("bytes", int64(req.response_bytes), req.longname+"`response_bytes")
+			wl_track_int64("tuples", int64(req.response_rows), req.longname+"`response_rows")
+			wl_track_float64("seconds", float64(duration)/1000000000.0, req.longname+"`latency")
 		}
 	}
 }
@@ -559,6 +565,7 @@ func (p *postgres_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data 
 				if *debug_postgres {
 					log.Printf("<- %v queued", p.request_frame.CommandName())
 				}
+				p.extract(stream.factory.config.(postgresConfig), &p.request_frame)
 				p.pushStream(p.request_frame.copy())
 			default:
 				if *debug_postgres {
