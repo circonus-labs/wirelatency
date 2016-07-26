@@ -587,7 +587,7 @@ func (p *postgres_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data 
 }
 func (p *postgres_Parser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	var pgConfig postgresConfig
-	if stream == nil || stream.factory==nil || stream.factory.config == nil {
+	if stream == nil || stream.factory == nil || stream.factory.config == nil {
 		return false
 	}
 	pgConfig = stream.factory.config.(postgresConfig)

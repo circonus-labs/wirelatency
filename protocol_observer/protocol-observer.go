@@ -14,6 +14,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 )
 
 var version string = "0.0.3"
@@ -81,16 +83,37 @@ var checkid = flag.String("checkid", "", "The Circonus check ID (not bundle id)"
 var brokergroupid = flag.String("brokergroupid", "", "The broker group id")
 var pprofNet = flag.Int("pprof_net", 0, "Port on which to listen for pprof")
 var brokertag = flag.String("brokertag", "", "The broker tag for selection")
+var autoRestart = flag.String("auto_restart", "", "Restart duration")
 
 func main() {
+	var orig_args = make([]string, len(os.Args))
+        for idx, arg := range os.Args { orig_args[idx] = arg }
+
+	var orig_env = make([]string, len(os.Environ()))
+        for idx, arg := range os.Environ() { orig_env[idx] = arg }
+
 	var localip_flag localip
 	flag.Var(&localip_flag, "localip", "<ipaddress>")
 	var registrations_flag regflag
 	flag.Var(&registrations_flag, "wire", "<name>:<port>[:<config>]")
 	flag.Parse()
+
 	if *vflag {
 		fmt.Printf("%s version %s\n", os.Args[0], version)
 		os.Exit(0)
+	}
+
+	if *autoRestart != "" {
+		dur, err := time.ParseDuration(*autoRestart)
+		if err != nil {
+			log.Fatalf("Bad auto_restart duration: %v\n", err)
+		}
+		go (func(d time.Duration) {
+			time.Sleep(d)
+			wirelatency.Close()
+			syscall.Exec(orig_args[0], orig_args, orig_env)
+			log.Fatalf("Failed process replacement\n")
+		})(dur)
 	}
 
 	if *pprofNet > 0 {

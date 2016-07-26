@@ -146,6 +146,15 @@ func selectInterface() string {
 	}
 	return *iface
 }
+
+var handles []*pcap.Handle = make([]*pcap.Handle, 0)
+
+func Close() {
+	for _, handle := range handles {
+		handle.Close()
+	}
+	handles = make([]*pcap.Handle, 0)
+}
 func Capture() {
 	flushDuration, err := time.ParseDuration(*flushAfter)
 	if err != nil {
@@ -177,23 +186,25 @@ func Capture() {
 		}
 		log.Printf("[DEBUG] Activating BPF%sfilter on %v: '%v'", pstr, ifname, filter)
 	}
-	handle, err := pcap.OpenLive(ifname, 65536, promisc, pcap.BlockForever)
+	handle, err := pcap.OpenLive(ifname, 65536, promisc, time.Millisecond*100)
 	if err != nil {
 		log.Fatal("error opening pcap handle: ", err)
 	}
 	if err := handle.SetBPFFilter(filter); err != nil {
 		log.Fatal("error setting BPF filter: ", err)
 	}
-
+	handles = append(handles, handle)
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packets := packetSource.Packets()
-	flushTicker := time.Tick(flushDuration/2)
-	closeTicker := time.Tick(closeDuration/2)
+	flushTicker := time.Tick(flushDuration / 2)
+	closeTicker := time.Tick(closeDuration / 2)
 
 	wake_up_and_gc := make(chan bool, 1)
-	go (func () {
+	go (func() {
 		for {
-			if ok := <-wake_up_and_gc ; ! ok { break }
+			if ok := <-wake_up_and_gc; !ok {
+				break
+			}
 			runtime.GC()
 		}
 	})()
@@ -221,6 +232,7 @@ func Capture() {
 
 		case packet := <-packets:
 			if packet == nil {
+				log.Printf("No packets?")
 				return
 			}
 			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
