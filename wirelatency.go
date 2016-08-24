@@ -186,7 +186,7 @@ func Capture() {
 		}
 		log.Printf("[DEBUG] Activating BPF%sfilter on %v: '%v'", pstr, ifname, filter)
 	}
-	handle, err := pcap.OpenLive(ifname, 65536, promisc, time.Millisecond*100)
+	handle, err := pcap.OpenLive(ifname, 65536, promisc, pcap.BlockForever)
 	if err != nil {
 		log.Fatal("error opening pcap handle: ", err)
 	}
