@@ -41,7 +41,7 @@ func wl_track_int64(units string, value int64, name string) {
 }
 func wl_track_float64(units string, value float64, name string) {
 	if *debug_measurements {
-		log.Printf("[METRIC] %s -> %f %s", name, value, units)
+		log.Printf("[METRIC] %s -> %e %s", name, value, units)
 	}
 	if metrics != nil {
 		metrics.SetHistogramValue(name, value)

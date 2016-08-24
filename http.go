@@ -58,10 +58,10 @@ func (p *httpParser) process() {
 		req, p.reqinfo = p.reqinfo[0], p.reqinfo[1:]
 		resp, p.respinfo = p.respinfo[0], p.respinfo[1:]
 		name := req.method + "`" + req.name + "`" + resp.status_name
-		tt_firstbyte := math.Max(float64(resp.ta_firstbyte.Sub(req.start)), 0.00001)
-		tt_duration := math.Max(float64(resp.end.Sub(req.start)), 0.00001)
-		wl_track_float64("seconds", tt_firstbyte/1000000000.0, name+"`firstbyte_latency")
-		wl_track_float64("seconds", tt_duration/1000000000.0, name+"`latency")
+		tt_firstbyte := math.Max(float64(resp.ta_firstbyte.Sub(req.start))/1000000000.0, 0.0000001)
+		tt_duration := math.Max(float64(resp.end.Sub(req.start))/1000000000.0, 0.0000001)
+		wl_track_float64("seconds", tt_firstbyte, name+"`firstbyte_latency")
+		wl_track_float64("seconds", tt_duration, name+"`latency")
 		wl_track_int64("bytes", int64(req.size), name+"`request_bytes")
 		wl_track_int64("bytes", int64(resp.size), name+"`response_bytes")
 	}
