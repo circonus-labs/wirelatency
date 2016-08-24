@@ -1,13 +1,13 @@
 package wirelatency
 
 import (
-	"bufio"
 	"encoding/json"
 	"flag"
 	"github.com/postwait/gopacket/tcpassembly/tcpreader"
 	"io"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"regexp"
 	"sync"
@@ -38,28 +38,15 @@ type httpRespInfo struct {
 	end          time.Time
 }
 type httpParser struct {
-	l            sync.Mutex
-	reqinfo      []*httpReqInfo
-	respinfo     []*httpRespInfo
-	last_in      time.Time
-	ta_firstbyte time.Time
-	ta_lastbyte  time.Time
+	l        sync.Mutex
+	reqinfo  []*httpReqInfo
+	respinfo []*httpRespInfo
 }
 
 func (p *httpParser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
-	p.last_in = seen
 	return true
 }
 func (p *httpParser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
-	if len(data) < 0 {
-		return true
-	}
-	p.l.Lock()
-	defer p.l.Unlock()
-	p.ta_lastbyte = seen
-	if p.ta_firstbyte.Before(p.last_in) {
-		p.ta_firstbyte = seen
-	}
 	return true
 }
 func (p *httpParser) process() {
@@ -71,23 +58,42 @@ func (p *httpParser) process() {
 		req, p.reqinfo = p.reqinfo[0], p.reqinfo[1:]
 		resp, p.respinfo = p.respinfo[0], p.respinfo[1:]
 		name := req.method + "`" + req.name + "`" + resp.status_name
-		tt_firstbyte := resp.ta_firstbyte.Sub(req.start)
-		tt_duration := resp.end.Sub(req.start)
-		wl_track_float64("seconds", float64(tt_firstbyte)/1000000000.0, name+"`firstbyte_latency")
-		wl_track_float64("seconds", float64(tt_duration)/1000000000.0, name+"`latency")
+		tt_firstbyte := math.Max(float64(resp.ta_firstbyte.Sub(req.start)), 0.00001)
+		tt_duration := math.Max(float64(resp.end.Sub(req.start)), 0.00001)
+		wl_track_float64("seconds", tt_firstbyte/1000000000.0, name+"`firstbyte_latency")
+		wl_track_float64("seconds", tt_duration/1000000000.0, name+"`latency")
 		wl_track_int64("bytes", int64(req.size), name+"`request_bytes")
 		wl_track_int64("bytes", int64(resp.size), name+"`response_bytes")
 	}
 }
 func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
+	defer func() {
+		if r := recover(); r != nil {
+			if *debug_wl_http {
+				log.Println("[RECOVERY] (http/ManageIn): %v", r)
+			}
+		}
+	}()
 	var config interface{}
 	factory := stream.factory
 	if factory != nil {
 		config = factory.config
 	}
-	r_in := bufio.NewReader(stream.in.reader)
+	r_in := stream.in.reader
 	for {
 		var req *http.Request
+		_, err := r_in.ReadByte()
+		if err == nil {
+			err = r_in.UnreadByte()
+		}
+		if err != nil {
+			if *debug_wl_http {
+				log.Println("[DEBUG] Error parsing HTTP requests:", err)
+			}
+			return
+		}
+		start_time := time.Now()
+
 		if newReq, err := http.ReadRequest(r_in); err == io.EOF {
 			return
 		} else if err != nil {
@@ -96,6 +102,9 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 			}
 			return
 		} else {
+			if *debug_wl_http {
+				log.Println("[DEBUG] new request read.")
+			}
 			req = newReq
 			nbytes, derr := tcpreader.DiscardBytesToFirstError(req.Body)
 			if derr != nil && derr != io.EOF {
@@ -115,7 +124,7 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 			p.reqinfo = append(p.reqinfo, &httpReqInfo{
 				name:   UrlMatch(config, path),
 				method: req.Method,
-				start:  p.last_in,
+				start:  start_time,
 				size:   nbytes,
 			})
 			p.l.Unlock()
@@ -125,20 +134,40 @@ func (p *httpParser) ManageIn(stream *tcpTwoWayStream) {
 }
 
 func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
-	r_out := bufio.NewReader(stream.out.reader)
+	defer func() {
+		if r := recover(); r != nil {
+			if *debug_wl_http {
+				log.Println("[RECOVERY] (http/ManageOut): %v", r)
+			}
+		}
+	}()
+	r_out := stream.out.reader
 	for {
 		var req *http.Request
+		_, err := r_out.ReadByte()
+		if err == nil {
+			err = r_out.UnreadByte()
+		}
+		if err != nil {
+			if *debug_wl_http {
+				log.Println("[DEBUG] Error parsing HTTP requests:", err)
+			}
+			return
+		}
+		ta_firstbyte := time.Now()
+
 		if resp, err := http.ReadResponse(r_out, req); err == io.EOF {
 			return
 		} else if err != nil {
 			if *debug_wl_http {
 				log.Println("[DEBUG] Error parsing HTTP responses:", err)
+				log.Printf("[%+v]\n", stream.out)
 			}
 			return
 		} else {
-			p.l.Lock()
-			ta_firstbyte := p.ta_firstbyte
-			p.l.Unlock()
+			if *debug_wl_http {
+				log.Println("[DEBUG] new response read.")
+			}
 			nbytes, derr := tcpreader.DiscardBytesToFirstError(resp.Body)
 			if derr != nil && derr != io.EOF {
 				if *debug_wl_http {
@@ -146,9 +175,7 @@ func (p *httpParser) ManageOut(stream *tcpTwoWayStream) {
 				}
 				return
 			}
-			p.l.Lock()
-			ta_lastbyte := p.ta_lastbyte
-			p.l.Unlock()
+			ta_lastbyte := time.Now()
 			resp.Body.Close()
 			if *debug_wl_http {
 				log.Println("[DEBUG] Body contains", nbytes, "bytes")

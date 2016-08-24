@@ -1,6 +1,7 @@
 package wirelatency
 
 import (
+	"bufio"
 	"container/list"
 	"github.com/postwait/gopacket"
 	"github.com/postwait/gopacket/layers"
@@ -8,6 +9,7 @@ import (
 	"github.com/postwait/gopacket/tcpassembly/tcpreader"
 	"log"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -46,7 +48,12 @@ type tcpStream struct {
 	bytes, packets, outOfOrder, skipped int64
 	start, end                          time.Time
 	sawStart, sawEnd                    bool
-	reader                              *tcpreader.ReaderStream
+	readerTcp_complete_mu               sync.Mutex
+	readerTcp_complete                  bool
+	readerTcp                           *tcpreader.ReaderStream
+	reader                              *bufio.Reader
+	reassemblies_channel                chan []tcpassembly.Reassembly
+	reassemblies_channel_closed         bool
 	parent                              *tcpTwoWayStream
 }
 type noopTcpStream struct {
@@ -85,13 +92,18 @@ func (twa *tcpTwoWayStream) release() bool {
 	}
 
 	if !twa.inCreated && !twa.outCreated {
+		if *debug_capture {
+			log.Printf("[DEBUG] cleanup shitting down %v", twa)
+		}
 		if twa.in != nil {
 			twa.in.parent = nil
+			twa.in.shutdownReader()
 			twa.in.reader = nil
 		}
 		twa.in = nil
 		if twa.out != nil {
 			twa.out.parent = nil
+			twa.out.shutdownReader()
 			twa.out.reader = nil
 		}
 		twa.out = nil
@@ -141,7 +153,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 	}
 
 	if *debug_capture {
-		log.Printf("[DEBUG] New(%v, %v)\n", net, transport)
+		log.Printf("[DEBUG] New(%v, %v) -> %v\n", net, transport, inbound)
 	}
 	// Setup the two level session hash
 	// session[localnet:remotenet][localport:remoteport] -> &tcpTwoWayStream
@@ -177,7 +189,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 	interp := *parent.interp
 	if inbound {
 		if *debug_capture {
-			log.Printf("[DEBUG] new inbound TCP stream %v:%v started, paired: %v", net_session, transport_session, parent.out != nil)
+			log.Printf("[DEBUG] new inbound TCP stream %v:%v started, paired: %v", net, transport, parent.out != nil)
 		}
 		atomic.AddInt64(&factory.n_clients, 1)
 		atomic.AddInt64(&factory.n_sessions, 1)
@@ -188,14 +200,11 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			transport: transport,
 			start:     time.Now(),
 		}
-		if factory.useReaders {
-			r := tcpreader.NewReaderStream()
-			s.reader = &r
-		}
 		parent.inCreated = true
 		parent.in = s
 		s.end = s.start
 		if factory.useReaders {
+			s.startReader()
 			go func() {
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) started", s.net, s.transport)
@@ -204,7 +213,6 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 				if *debug_capture {
 					log.Printf("[DEBUG] go ManageIn(%v:%v) ended", s.net, s.transport)
 				}
-				s.reader = nil
 				close(parent.cleanupIn)
 			}()
 		} else {
@@ -214,7 +222,7 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 	}
 
 	if *debug_capture {
-		log.Printf("[DEBUG] new outbound TCP stream %v:%v started, paired: %v", net_session, transport_session, parent.in != nil)
+		log.Printf("[DEBUG] new outbound TCP stream %v:%v started, paired: %v", net, transport, parent.in != nil)
 	}
 	// The outbound return session startup
 	s := &tcpStream{
@@ -224,13 +232,10 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		transport: transport,
 		start:     time.Now(),
 	}
-	if factory.useReaders {
-		r := tcpreader.NewReaderStream()
-		s.reader = &r
-	}
 	parent.outCreated = true
 	parent.out = s
 	if factory.useReaders {
+		s.startReader()
 		go func() {
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) started", s.net, s.transport)
@@ -239,7 +244,6 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 			if *debug_capture {
 				log.Printf("[DEBUG] go ManageOut(%v:%v) ended", s.net, s.transport)
 			}
-			s.reader = nil
 			close(parent.cleanupOut)
 		}()
 	} else {
@@ -258,6 +262,49 @@ func (s *noopTcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 func (s *noopTcpStream) ReassemblyComplete() {
 }
 
+func (s *tcpStream) startReader() {
+	r := tcpreader.NewReaderStream()
+	s.readerTcp = &r
+	s.reader = bufio.NewReader(s.readerTcp)
+	s.reassemblies_channel = make(chan []tcpassembly.Reassembly, 10)
+	go func(s *tcpStream) {
+		defer func() {
+			if r := recover(); r != nil {
+				if *debug_capture {
+					log.Printf("[RECOVERY] tcp/startReader %v\n", r)
+				}
+			}
+		}()
+		for {
+			reassemblies, ok := <-s.reassemblies_channel
+			if !ok {
+				s.readerTcp_complete_mu.Lock()
+				defer s.readerTcp_complete_mu.Unlock()
+				if !s.readerTcp_complete {
+					s.readerTcp_complete = true
+					s.readerTcp.ReassemblyComplete()
+				}
+				return
+			}
+			s.readerTcp.Reassembled(reassemblies)
+		}
+	}(s)
+}
+func (s *tcpStream) shutdownReader() {
+	if s.reader == nil {
+		return
+	}
+	if !s.reassemblies_channel_closed {
+		s.reassemblies_channel_closed = true
+		close(s.reassemblies_channel)
+	}
+	s.readerTcp_complete_mu.Lock()
+	defer s.readerTcp_complete_mu.Unlock()
+	if !s.readerTcp_complete {
+		s.readerTcp_complete = true
+		s.readerTcp.ReassemblyComplete()
+	}
+}
 func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 	if s.parent == nil || s.parent.factory == nil || s.parent.state == sessionStateBad {
 		if *debug_capture {
@@ -325,8 +372,15 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 		s.sawEnd = s.sawEnd || reassembly.End
 	}
 
-	if s.reader != nil {
-		s.reader.Reassembled(reassemblies)
+	if s.readerTcp != nil {
+		mycopy := make([]tcpassembly.Reassembly, len(reassemblies))
+		copy(mycopy, reassemblies)
+		for i := 0; i < len(mycopy); i++ {
+			mycopy[i].Bytes = make([]byte, len(reassemblies[i].Bytes))
+			copy(mycopy[i].Bytes, reassemblies[i].Bytes)
+		}
+		s.reassemblies_channel <- mycopy
+		//s.readerTcp.Reassembled(reassemblies)
 	}
 }
 func (s *tcpStream) ReassemblyComplete() {
@@ -337,17 +391,19 @@ func (s *tcpStream) ReassemblyComplete() {
 		transport_session = s.transport.Reverse()
 	}
 
-	if reader := s.reader; reader != nil {
+	if s.reassemblies_channel != nil {
 		if *debug_capture {
-			log.Printf("[DEBUG] reassembly complete (inbound: %v): %v:%v", s.inbound, s.net, s.transport)
+			log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
 		}
-		s.reader.ReassemblyComplete()
+		if !s.reassemblies_channel_closed {
+			s.reassemblies_channel_closed = true
+			close(s.reassemblies_channel)
+		}
 	}
 	if dsess, ok := sessions[net_session]; ok {
 		if parent, ok := dsess[transport_session]; ok {
 			factory := parent.factory
 			if *debug_capture {
-				log.Printf("[DEBUG] reassembly done %v:%v", s.net, s.transport)
 				log.Printf("[DEBUG] removing sub session: %v:%v", s.net, s.transport)
 			}
 			delete(dsess, transport_session)

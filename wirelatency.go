@@ -208,8 +208,7 @@ func Capture() {
 			runtime.GC()
 		}
 	})()
-
-	for {
+	go (func() {
 		select {
 		case <-flushTicker:
 			if *debug_capture {
@@ -229,11 +228,15 @@ func Capture() {
 				twa.assembler.FlushOlderThan(time.Now().Add(0 - closeDuration))
 			}
 			wake_up_and_gc <- true
+		}
+	})()
 
+	for {
+		select {
 		case packet := <-packets:
 			if packet == nil {
 				log.Printf("No packets?")
-				return
+				continue
 			}
 			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
 				continue
