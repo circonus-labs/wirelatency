@@ -216,7 +216,7 @@ func Capture() {
 				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
 			}
 			for _, twa := range portAssemblerMap {
-				twa.assembler.FlushNoCloseOlderThan(time.Now().Add(0 - flushDuration))
+				twa.assembler.FlushWithOptions(tcpassembly.FlushOptions{CloseAll: false, T: time.Now().Add(0 - flushDuration)})
 			}
 
 		case <-closeTicker:
