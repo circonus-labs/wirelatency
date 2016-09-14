@@ -121,7 +121,7 @@ func main() {
 			http.ListenAndServe("localhost:"+strconv.Itoa(*pprofNet), nil)
 		}()
 	}
-	if *apitoken == "" {
+	if *apitoken == "" && *submissionurl == "" {
 		log.Printf("No Circonus API Token specified, no reporting will happen.")
 	} else {
 		cfg := &circonusgometrics.Config{}
