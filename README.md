@@ -51,7 +51,7 @@ the HTTP status codes by the hundreds: 1xx, 2xx, 3xx, 4xx, and 5xx.
 ### Postgres
 
 ```
-protocol_observer -apitoken <token> -wire http:5432:queries.json
+protocol_observer -apitoken <token> -wire postgres:5432:queries.json
 ```
 
 This will listen for postgres traffic on port 5432.  If a config is omitted
@@ -62,9 +62,9 @@ execution of prepared statements.  All statements are tracked and the
 latency, request bytes, response bytes and number of tuples effected is
 recorded.  The format of metrics looks like ``<type>`<attribute>``
 and ``<type>`SELECT`<attribute>`` where the "SELECT" is taken from the postgres
-execute command complete packet.  "SELECT" could be "DELETE" or "UPDATED" or
-anything else Postgres elects to respond with.  The <type> will be one of
-Query or Execute.  The <attribute> will be one of "latency", "request_bytes",
+execute command complete packet.  "SELECT" could be "DELETE" or "UPDATE" or
+anything else Postgres elects to respond with.  The `<type>` will be one of
+Query or Execute.  The `<attribute>` will be one of "latency", "request_bytes",
 "response_bytes", or "response_rows."
 
 Additionally, pursuant to your configuration (if supplied) you can record
