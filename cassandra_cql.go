@@ -190,6 +190,7 @@ func (f *cassandra_cql_frame) fillFrame(seen time.Time, data []byte) (complete b
 		f.payload = append(f.payload, data[used:(used+int(capped_append))]...)
 	}
 	used = used + int(to_append)
+	f.so_far += int(to_append)
 	if remaining == to_append {
 		if 0 != (f.flags & flag_COMPRESSION) {
 			if data, err := snappy.Decode(nil, f.payload); err == nil {
