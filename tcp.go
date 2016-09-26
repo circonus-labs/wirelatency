@@ -336,7 +336,10 @@ func (s *tcpStream) Reassembled(reassemblies []tcpassembly.Reassembly) {
 			if *debug_capture {
 				log.Printf("[DEBUG] %v skip: %v", direction, reassembly.Skip)
 			}
-			parent.state = sessionStateBad
+			// One side will skip before the other.  If the out
+			// side skips first we just need to ignore it until
+			// the in side skips and flips the state to "good"
+			return
 		} else if parent.state != sessionStateGood {
 			if *debug_capture {
 				log.Printf("[DEBUG] %v entering bad state [from %v]", direction, parent.state)
