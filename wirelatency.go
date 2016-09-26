@@ -209,25 +209,27 @@ func Capture() {
 		}
 	})()
 	go (func() {
-		select {
-		case <-flushTicker:
-			if *debug_capture {
-				stats, _ := handle.Stats()
-				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
-			}
-			for _, twa := range portAssemblerMap {
-				twa.assembler.FlushWithOptions(tcpassembly.FlushOptions{CloseAll: false, T: time.Now().Add(0 - flushDuration)})
-			}
+		for {
+			select {
+			case <-flushTicker:
+				if *debug_capture {
+					stats, _ := handle.Stats()
+					log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
+				}
+				for _, twa := range portAssemblerMap {
+					twa.assembler.FlushWithOptions(tcpassembly.FlushOptions{CloseAll: false, T: time.Now().Add(0 - flushDuration)})
+				}
 
-		case <-closeTicker:
-			if *debug_capture {
-				stats, _ := handle.Stats()
-				log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
+			case <-closeTicker:
+				if *debug_capture {
+					stats, _ := handle.Stats()
+					log.Printf("[DEBUG] flushing all streams that haven't seen packets, pcap stats: %+v", stats)
+				}
+				for _, twa := range portAssemblerMap {
+					twa.assembler.FlushOlderThan(time.Now().Add(0 - closeDuration))
+				}
+				wake_up_and_gc <- true
 			}
-			for _, twa := range portAssemblerMap {
-				twa.assembler.FlushOlderThan(time.Now().Add(0 - closeDuration))
-			}
-			wake_up_and_gc <- true
 		}
 	})()
 
