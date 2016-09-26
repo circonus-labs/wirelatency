@@ -2,10 +2,14 @@ package wirelatency
 
 import (
 	"encoding/binary"
+	"flag"
 	"github.com/golang/snappy"
+	"log"
 	"strings"
 	"time"
 )
+
+var debug_cql = flag.Bool("debug_cql", false, "Debug cassandra cql reassembly")
 
 const (
 	retainedPayloadSize int = 512
@@ -179,7 +183,12 @@ func (f *cassandra_cql_frame) fillFrame(seen time.Time, data []byte) (complete b
 		capped_append = uint32(cap(f.payload) - len(f.payload))
 		f.truncated = true
 	}
-	f.payload = append(f.payload, data[used:(used+int(capped_append))]...)
+	if *debug_cql {
+		log.Printf("[cql] need to read %d of %d, just %d capped to %d\n", remaining, f.length, to_append, capped_append)
+	}
+	if capped_append > 0 {
+		f.payload = append(f.payload, data[used:(used+int(capped_append))]...)
+	}
 	used = used + int(to_append)
 	if remaining == to_append {
 		if 0 != (f.flags & flag_COMPRESSION) {
@@ -264,6 +273,9 @@ func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, 
 	// build a request
 	for {
 		if len(data) == 0 {
+			if *debug_cql {
+				log.Printf("[cql] incomplete in frame\n")
+			}
 			return true
 		}
 		if complete, used := p.request_frame.fillFrame(seen, data); complete {
@@ -271,8 +283,14 @@ func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, 
 			data = data[used:]
 			p.request_frame.init()
 		} else if used < 0 {
+			if *debug_cql {
+				log.Printf("[cql] bad in frame\n")
+			}
 			return false
 		} else if !complete {
+			if *debug_cql {
+				log.Printf("[cql] incomplete in frame\n")
+			}
 			return true
 		}
 	}
@@ -280,18 +298,30 @@ func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, 
 func (p *cassandra_cql_Parser) OutBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	for {
 		if len(data) == 0 {
+			if *debug_cql {
+				log.Printf("[cql] incomplete out frame\n")
+			}
 			return true
 		}
 		if complete, used := p.response_frame.fillFrame(seen, data); complete {
 			req := p.popFromStream(p.response_frame.stream)
+			if *debug_cql {
+				log.Printf("[cql] %p response %+v\n", req, &p.response_frame)
+			}
 			if req != nil {
 				p.report(req, &p.response_frame)
 			}
 			data = data[used:]
 			p.response_frame.init()
 		} else if used < 0 {
+			if *debug_cql {
+				log.Printf("[cql] bad out frame\n")
+			}
 			return false
 		} else if !complete {
+			if *debug_cql {
+				log.Printf("[cql] incomplete out frame\n")
+			}
 			return true
 		}
 	}
