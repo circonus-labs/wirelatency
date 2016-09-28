@@ -114,5 +114,7 @@ go get github.com/circonus-labs/wirelatency
 Running:
 ```
 cd $GOPATH/src/github.com/circonus-labs/wirelatency/protocol_observer
-sudo go run protocol-observer.go  <options>
+go build
+./protocol-observer <options>
+# or: sudo go run protocol-observer.go  <options>
 ```
