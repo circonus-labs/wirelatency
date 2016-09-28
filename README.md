@@ -1,6 +1,6 @@
 # Circonus WireLatency
 
-These are go-based tools to sniff the wire and reconstruct various protocol
+These are Go-based tools to sniff the wire and reconstruct various protocol
 sessions to extract various telemetry (namely latency) from transactions
 within those sessions.
 
@@ -38,12 +38,12 @@ protocol_observer -apitoken <token> -wire http:8092:routes.json
 ```
 
 This will listen for HTTP traffic on port 8092 using the file `routes.json`
-as a mapping of URLs to "names."  This allows requests to an API service
+as a mapping of URLs to "names".  This allows requests to an API service
 to be correctly categorized by endpoint.  See the same routes.json included.
 
 Each request is recorded and the request and response payload sizes are
 recorded along with the latency to the first byte of the response and the
-latency for the entire respnose.
+latency for the entire response.
 
 Metric names are formed as ``<method>`<endpoint>`<status>`` where status is
 the HTTP status codes by the hundreds: 1xx, 2xx, 3xx, 4xx, and 5xx.
@@ -54,7 +54,7 @@ the HTTP status codes by the hundreds: 1xx, 2xx, 3xx, 4xx, and 5xx.
 protocol_observer -apitoken <token> -wire postgres:5432:queries.json
 ```
 
-This will listen for postgres traffic on port 5432.  If a config is omitted
+This will listen for Postgres traffic on port 5432.  If a config is omitted
 the default config will be used.  If the port is omitted, 5432 will be used.
 
 The protocol observer here distinguishes between regular queries and the
@@ -68,14 +68,14 @@ Query or Execute.  The `<attribute>` will be one of "latency", "request_bytes",
 "response_bytes", or "response_rows."
 
 Additionally, pursuant to your configuration (if supplied) you can record
-metrics for a query.  Prepared and Adhoc queries are handeld separately as
+metrics for a query.  Prepared and Adhoc queries are handled separately as
 most people will only want to record latency information on a limited keyspace
 and thus only leverage the configuration to log prepared queries.
 
 The Query field is a regular expression matching against the query being
 executed.  The Name field helps instruct how the query should be presented.
 If name is an empty string, no query-specific recording is done.  If it is the
-string "RAW" then the whole query is jammed int he metric name.  If it is the
+string "RAW" then the whole query is jammed in the metric name.  If it is the
 string "SHA256" then a hex-encoded sha256 of the query is used.  Otherwise
 the literal string is used to build the metric name.
 
@@ -85,10 +85,10 @@ the literal string is used to build the metric name.
 protocol_observer -apitoken <token> -wire kafka:9093
 ```
 
-This will listen for kafka traffic on the specified port (9092 by default).
+This will listen for Kafka traffic on the specified port (9092 by default).
 
 Message and protocol command latency is recorded as well as message and frame
 sizes.  All production "Produce" and consumption "Fetch" are tracked in
 `_aggregate` and by topic.  Messages in production and consumption are expanded
-(including gzip and snappy) to analyize for message timestamps (for latency) and
+(including gzip and snappy) to analyze for message timestamps (for latency) and
 uncompressed payload sizes.
