@@ -3,7 +3,7 @@ package wirelatency
 import (
 	"encoding/json"
 	"flag"
-	"github.com/postwait/gopacket/tcpassembly/tcpreader"
+	"github.com/google/gopacket/tcpassembly/tcpreader"
 	"io"
 	"io/ioutil"
 	"log"

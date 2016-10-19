@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"github.com/circonus-labs/circonus-gometrics"
 	"github.com/circonus-labs/wirelatency"
-	"github.com/postwait/gopacket/layers"
+	"github.com/google/gopacket/layers"
 	"log"
 	"net"
 	"net/http"
