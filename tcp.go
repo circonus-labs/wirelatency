@@ -174,6 +174,8 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		parent = &tcpTwoWayStream{interp: &interp, factory: factory}
 		parent.cleanupIn = make(chan bool, 1)
 		parent.cleanupOut = make(chan bool, 1)
+		atomic.AddInt64(&factory.n_clients, 1)
+		atomic.AddInt64(&factory.n_sessions, 1)
 		dsess[transport_session] = parent
 	}
 
@@ -191,8 +193,6 @@ func (factory *tcpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.S
 		if *debug_capture {
 			log.Printf("[DEBUG] new inbound TCP stream %v:%v started, paired: %v", net, transport, parent.out != nil)
 		}
-		atomic.AddInt64(&factory.n_clients, 1)
-		atomic.AddInt64(&factory.n_sessions, 1)
 		s := &tcpStream{
 			inbound:   true,
 			parent:    parent,
