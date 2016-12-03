@@ -346,6 +346,7 @@ func (f *cassandra_cql_ParserFactory) New() TCPProtocolInterpreter {
 }
 func init() {
 	factory := &cassandra_cql_ParserFactory{}
+	factory.parsed = make(map[uint16]string)
 	cassProt := &TCPProtocol{name: "cassandra_cql", defaultPort: 9042}
 	cassProt.interpFactory = factory
 	RegisterTCPProtocol(cassProt)
