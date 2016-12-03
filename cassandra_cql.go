@@ -261,14 +261,22 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			cql = &DEFAULT_CQL
 		}
 	}
+
 	duration := resp.timestamp.Sub(req.timestamp)
+
 	name := req.OpcodeName()
-	if req.opcode == cmd_EXECUTE {
-		name = name + "`" + *cql
-	}
+
 	wl_track_int64("bytes", int64(req.length), name+"`request_bytes")
 	wl_track_int64("bytes", int64(resp.length), name+"`response_bytes")
 	wl_track_float64("seconds", float64(duration)/1000000000.0, name+"`latency")
+
+	if req.opcode == cmd_EXECUTE {
+		// track query-specific execute metrics, in addition to aggregate
+		execName := name + "`" + *cql
+		wl_track_int64("bytes", int64(req.length), execName+"`request_bytes")
+		wl_track_int64("bytes", int64(resp.length), execName+"`response_bytes")
+		wl_track_float64("seconds", float64(duration)/1000000000.0, execName+"`latency")
+	}
 }
 func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	// build a request
