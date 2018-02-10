@@ -8,6 +8,15 @@ For example, it can be used to track the latency of HTTP API endpoints.
 
 All telemetry data is pushed up to Circonus.
 
+## Build
+
+You'll need pcap library headers installed as a dependency. See your
+operating system's package manager for details.
+
+The golang dependencies are vendored into the checkout, so you can run
+`go build` and execute the `protocol_observer` binary in the protocol_observer
+directory.
+
 ## Tooling
 
 ```
@@ -19,13 +28,23 @@ The `-wire` flag can be specified multiple times to specify multiple
 service.  It is recommended to keep separate services monitored by
 separate protocol_observer instances.
 
+A number of debugging options are available which can be useful to verify
+that metrics are being collected successfully. This example below demonstrates
+the most verbose usage of the tool for observing Cassandra queries.
+
+```
+sudo protocol_observer -apitoken <circonus_api_token> -wire cassandra_cql \
+    -debug_capture=true -debug_circonus=true -debug_capture_data=true \
+    -debug_cql=true -debug_measurements=true
+```
+
 ### Cassandra
 
 ```
 protocol_observer -apitoken <token> -wire cassandra_cql
 ```
 
-Will listen on port 9042 for Cassandra CQL framing and disset sessions.
+Will listen on port 9042 for Cassandra CQL framing and dissect sessions.
 Each request/response will be tracked for latency.  Queries will generically
 be tracked as "QUERY", however each prepared query will get its own
 metric named for the CQL.  Latency is tracked on each operation as well
