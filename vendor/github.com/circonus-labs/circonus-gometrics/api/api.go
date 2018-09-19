@@ -6,6 +6,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -20,7 +21,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -241,7 +241,7 @@ func (a *API) apiRequest(reqMethod string, reqPath string, data []byte) ([]byte,
 			if !a.useExponentialBackoff {
 				break
 			}
-			if matched, _ := regexp.MatchString("code 403", err.Error()); matched {
+			if strings.Contains(err.Error(), "code 403") {
 				break
 			}
 		}
@@ -280,7 +280,11 @@ func (a *API) apiCall(reqMethod string, reqPath string, data []byte) ([]byte, er
 
 	// keep last HTTP error in the event of retry failure
 	var lastHTTPError error
-	retryPolicy := func(resp *http.Response, err error) (bool, error) {
+	retryPolicy := func(ctx context.Context, resp *http.Response, err error) (bool, error) {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+
 		if err != nil {
 			lastHTTPError = err
 			return true, err
