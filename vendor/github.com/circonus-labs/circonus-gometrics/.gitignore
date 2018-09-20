@@ -7,3 +7,5 @@ NOTES.md
 coverage.txt
 coverage.xml
 coverage.html
+
+vendor/

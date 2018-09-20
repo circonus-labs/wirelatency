@@ -9,20 +9,20 @@
     "api/config",
     "checkmgr"
   ]
-  revision = "b25d14eeef390159289ad3e8521eff3162c59685"
-  version = "v2.1.0"
+  revision = "dd698dc110872f6e554abf74a7740fc363354086"
+  version = "v2.2.1"
 
 [[projects]]
   branch = "master"
   name = "github.com/circonus-labs/circonusllhist"
   packages = ["."]
-  revision = "1e65893c445875524c5610f2a58aef24e30ef98a"
+  revision = "5eb751da55c6d3091faf3861ec5062ae91fee9d0"
 
 [[projects]]
   branch = "master"
   name = "github.com/golang/snappy"
   packages = ["."]
-  revision = "553a641470496b2327abcac10b36396bd98e45c9"
+  revision = "2e65f85255dbc3072edf28d6b5b8efc472979f5a"
 
 [[projects]]
   name = "github.com/google/gopacket"
@@ -37,16 +37,16 @@
   version = "v1.1.14"
 
 [[projects]]
-  branch = "master"
   name = "github.com/hashicorp/go-cleanhttp"
   packages = ["."]
-  revision = "d5fe4b57a186c716b0e00b8c301cbd9b4182694d"
+  revision = "e8ab9daed8d1ddd2d3c4efba338fe2eeae2e4f18"
+  version = "v0.5.0"
 
 [[projects]]
   branch = "master"
   name = "github.com/hashicorp/go-retryablehttp"
   packages = ["."]
-  revision = "794af36148bf63c118d6db80eb902a136b907e71"
+  revision = "e651d75abec6fbd4f2c09508f72ae7af8a8b7171"
 
 [[projects]]
   name = "github.com/pkg/errors"
