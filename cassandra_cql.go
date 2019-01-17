@@ -239,11 +239,16 @@ func read_longstring(data []byte) (out string, ok bool) {
 var DEFAULT_CQL string = "unknown cql"
 
 func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
-	var cql *string
+	var (
+		cql  *string
+		data []byte
+	)
 	cql = &DEFAULT_CQL
+	data = req.data
 	if req.opcode == cmd_QUERY && req.data != nil {
 		if qcql, ok := read_longstring(req.data); ok {
 			cql = &qcql
+			data = data[4+len(qcql):]
 		}
 	}
 	if req.opcode == cmd_PREPARE && req.data != nil {
@@ -253,11 +258,13 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 				qcql = strings.Replace(qcql, "\r", " ", -1)
 				cql = &qcql
 				p.factory.parsed[binary.BigEndian.Uint16(resp.data)] = *cql
+				data = data[4+len(qcql):]
 			}
 		}
 	}
 	if req.opcode == cmd_EXECUTE && req.data != nil && len(req.data) >= 2 {
 		id := binary.BigEndian.Uint16(req.data)
+		data = data[2:]
 		if prepared_cql, ok := p.factory.parsed[id]; ok {
 			cql = &prepared_cql
 		} else {
@@ -265,52 +272,54 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 		}
 	}
 
-	var buf strings.Builder
+	if req.opcode == cmd_QUERY || req.opcode == cmd_EXECUTE {
+		var buf strings.Builder
 
-	buf.WriteString("request cql: %s, args: ")
+		buf.WriteString("request cql: %s, args: ")
 
-	payload := req.payload
-	if len(payload) >= 2 {
-		// read consistency
-		payload, _ := readShort(payload)
+		payload := data
+		if len(payload) >= 2 {
+			// read consistency
+			payload, _ := readShort(payload)
 
-		// read flags
-		if req.version > 4 {
-			payload, _ = readUint(payload)
-		} else {
-			payload, _ = readByte(payload)
-		}
-
-		// read num args
-		payload, args := readShort(payload)
-
-		// read args
-		for i := 0; i < int(args); i++ {
-			buf.WriteString(fmt.Sprintf("arg%d=", i))
-
-			var numBytes int32
-			payload, numBytes = readInt(payload)
-			switch {
-			case numBytes == -1:
-				// nil
-				buf.WriteString("nil")
-			case numBytes == -2:
-				// unset
-				buf.WriteString("unset")
-			case numBytes >= 0:
-				buf.WriteString(fmt.Sprintf("%x", payload[:numBytes]))
-				payload = payload[numBytes:]
+			// read flags
+			if req.version > 4 {
+				payload, _ = readUint(payload)
+			} else {
+				payload, _ = readByte(payload)
 			}
 
-			if i != int(args)-1 {
-				buf.WriteString(", ")
+			// read num args
+			payload, args := readShort(payload)
+
+			// read args
+			for i := 0; i < int(args); i++ {
+				buf.WriteString(fmt.Sprintf("arg%d=", i))
+
+				var numBytes int32
+				payload, numBytes = readInt(payload)
+				switch {
+				case numBytes == -1:
+					// nil
+					buf.WriteString("nil")
+				case numBytes == -2:
+					// unset
+					buf.WriteString("unset")
+				case numBytes >= 0:
+					buf.WriteString(fmt.Sprintf("%x", payload[:numBytes]))
+					payload = payload[numBytes:]
+				}
+
+				if i != int(args)-1 {
+					buf.WriteString(", ")
+				}
 			}
 		}
+
+		buf.WriteString("\n")
+
+		os.Stdout.WriteString(buf.String())
 	}
-
-	buf.WriteString("\n")
-
-	os.Stdout.WriteString(buf.String())
 
 	duration := resp.timestamp.Sub(req.timestamp)
 
