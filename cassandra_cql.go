@@ -275,48 +275,70 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 	if req.opcode == cmd_QUERY || req.opcode == cmd_EXECUTE {
 		var buf strings.Builder
 
-		buf.WriteString("request cql: %s, args: ")
+		buf.WriteString(fmt.Sprintf("{\"cql\": \"%s\", \"args\": [", *cql))
 
-		payload := data
-		if len(payload) >= 2 {
-			// read consistency
-			payload, _ := readShort(payload)
+		var (
+			payload = data
+			err     error
+		)
 
-			// read flags
-			if req.version > 4 {
-				payload, _ = readUint(payload)
-			} else {
-				payload, _ = readByte(payload)
+		// read consistency
+		payload, _, err = readShort(payload)
+		if err != nil {
+			fmt.Printf("read consistency err: %v", err)
+			return
+		}
+
+		// read flags
+		if req.version > 4 {
+			payload, _, err = readUint(payload)
+		} else {
+			payload, _, err = readByte(payload)
+		}
+		if err != nil {
+			fmt.Printf("read flags err: %v", err)
+			return
+		}
+
+		// read num args
+		var args uint16
+		payload, args, err = readShort(payload)
+		if err != nil {
+			fmt.Printf("read num args err: %v", err)
+			return
+		}
+
+		// read args
+		for i := 0; i < int(args); i++ {
+			var numBytes int32
+			payload, numBytes, err = readInt(payload)
+			if err != nil {
+				fmt.Printf("read arg %d length err: %v", i, err)
+				return
+			}
+			switch {
+			case numBytes == -1:
+				// nil
+				buf.WriteString("null")
+			case numBytes == -2:
+				// unset
+				buf.WriteString("null")
+			case numBytes >= 0:
+				var bytes []byte
+				payload, bytes, err = readBytes(payload, int(numBytes))
+				if err != nil {
+					fmt.Printf("read arg %d value err: %v", i, err)
+					return
+				}
+				buf.WriteString(fmt.Sprintf("\"%x\"", bytes))
 			}
 
-			// read num args
-			payload, args := readShort(payload)
-
-			// read args
-			for i := 0; i < int(args); i++ {
-				buf.WriteString(fmt.Sprintf("arg%d=", i))
-
-				var numBytes int32
-				payload, numBytes = readInt(payload)
-				switch {
-				case numBytes == -1:
-					// nil
-					buf.WriteString("nil")
-				case numBytes == -2:
-					// unset
-					buf.WriteString("unset")
-				case numBytes >= 0:
-					buf.WriteString(fmt.Sprintf("%x", payload[:numBytes]))
-					payload = payload[numBytes:]
-				}
-
-				if i != int(args)-1 {
-					buf.WriteString(", ")
-				}
+			if i != int(args)-1 {
+				buf.WriteString(", ")
 			}
 		}
 
-		buf.WriteString("\n")
+		buf.WriteString("]}\n")
 
 		os.Stdout.WriteString(buf.String())
 	}
@@ -340,23 +362,44 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 
 var endianness = binary.BigEndian
 
-func readByte(b []byte) ([]byte, byte) {
-	return b[1:], b[0]
+func readByte(b []byte) ([]byte, byte, error) {
+	if len(b) < 1 {
+		return nil, 0, fmt.Errorf("readByte: no next byte")
+	}
+	return b[1:], b[0], nil
 }
 
-func readShort(b []byte) ([]byte, uint16) {
+func readShort(b []byte) ([]byte, uint16, error) {
+	if len(b) < 2 {
+		return nil, 0, fmt.Errorf("readShort: no next two bytes")
+	}
 	v := endianness.Uint16(b[:2])
-	return b[2:], v
+	return b[2:], v, nil
 }
 
-func readUint(b []byte) ([]byte, uint32) {
+func readUint(b []byte) ([]byte, uint32, error) {
+	if len(b) < 4 {
+		return nil, 0, fmt.Errorf("readUint: no next four bytes")
+	}
 	v := endianness.Uint32(b[:4])
-	return b[4:], v
+	return b[4:], v, nil
 }
 
-func readInt(p []byte) ([]byte, int32) {
+func readInt(p []byte) ([]byte, int32, error) {
+	if len(p) < 4 {
+		return nil, 0, fmt.Errorf("readInt: no next four bytes")
+	}
 	v := int32(p[0])<<24 | int32(p[1])<<16 | int32(p[2])<<8 | int32(p[3])
-	return p[4:], v
+	return p[4:], v, nil
+}
+
+func readBytes(b []byte, n int) (payload []byte, bytes []byte, err error) {
+	if len(b) < n {
+		return nil, nil, fmt.Errorf("readBytes: expecting %d bytes but only %d", n, len(b))
+	}
+	payload = b[n:]
+	bytes = b[:n]
+	return
 }
 
 func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
