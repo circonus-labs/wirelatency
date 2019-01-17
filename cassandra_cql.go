@@ -238,6 +238,8 @@ func read_longstring(data []byte) (out string, ok bool) {
 
 var DEFAULT_CQL string = "unknown cql"
 
+var debug_cql_req = flag.Bool("debug_cql_req", false, "Debug cassandra cql request reassembly")
+
 func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 	var (
 		cql  *string
@@ -282,21 +284,57 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			err     error
 		)
 
-		fmt.Printf("proto version: %d\n", int(req.version))
+		if *debug_cql_req {
+			fmt.Printf("proto version: %d\n", int(req.version))
+		}
 
 		// read consistency
-		payload, _, err = readShort(payload)
+		var consistency uint16
+		payload, consistency, err = readShort(payload)
 		if err != nil {
 			fmt.Printf("read consistency err: %v\n", err)
 			return
 		}
 
+		if *debug_cql_req {
+			switch consistency {
+			case 0x00:
+				fmt.Printf("consistency: Any\n")
+			case 0x01:
+				fmt.Printf("consistency: One\n")
+			case 0x02:
+				fmt.Printf("consistency: Two\n")
+			case 0x03:
+				fmt.Printf("consistency: Three\n")
+			case 0x04:
+				fmt.Printf("consistency: Quorum\n")
+			case 0x05:
+				fmt.Printf("consistency: All\n")
+			case 0x06:
+				fmt.Printf("consistency: LocalQuorum\n")
+			case 0x07:
+				fmt.Printf("consistency: EachQuorum\n")
+			case 0x0A:
+				fmt.Printf("consistency: LocalOne\n")
+			default:
+				fmt.Printf("consistency: UNKNOWN\n")
+			}
+		}
+
 		// read flags
-		// if req.version > 4 {
-		payload, _, err = readUint(payload)
-		// } else {
-		// 	payload, _, err = readByte(payload)
-		// }
+		if req.version > 4 {
+			var flags uint32
+			payload, flags, err = readUint(payload)
+			if *debug_cql_req {
+				fmt.Printf("flags: %x\n", flags)
+			}
+		} else {
+			var flags byte
+			payload, flags, err = readByte(payload)
+			if *debug_cql_req {
+				fmt.Printf("flags: %x\n", flags)
+			}
+		}
 		if err != nil {
 			fmt.Printf("read flags err: %v\n", err)
 			return
@@ -310,6 +348,10 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			return
 		}
 
+		if *debug_cql_req {
+			fmt.Printf("num args: %d\n", args)
+		}
+
 		// read args
 		for i := 0; i < int(args); i++ {
 			var numBytes int32
@@ -318,6 +360,11 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 				fmt.Printf("read arg %d length err: %v\n", i, err)
 				return
 			}
+
+			if *debug_cql_req {
+				fmt.Printf("arg %d length: %d\n", numBytes)
+			}
+
 			switch {
 			case numBytes == -1:
 				// nil
@@ -332,6 +379,10 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 					fmt.Printf("read arg %d value err: %v\n", i, err)
 					return
 				}
+				if *debug_cql_req {
+					fmt.Printf("arg %d value: %x\n", bytes)
+				}
+
 				buf.WriteString(fmt.Sprintf("\"%x\"", bytes))
 			}
 
