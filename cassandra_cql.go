@@ -253,12 +253,12 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 	}
 	if req.opcode == cmd_PREPARE && req.data != nil {
 		if qcql, ok := read_longstring(req.data); ok {
+			data = data[4+len(qcql):]
 			if resp.data != nil && len(resp.data) >= 2 {
 				qcql = strings.Replace(qcql, "\n", " ", -1)
 				qcql = strings.Replace(qcql, "\r", " ", -1)
 				cql = &qcql
 				p.factory.parsed[binary.BigEndian.Uint16(resp.data)] = *cql
-				data = data[4+len(qcql):]
 			}
 		}
 	}
@@ -282,6 +282,8 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			err     error
 		)
 
+		fmt.Printf("proto version: %d\n", int(req.version))
+
 		// read consistency
 		payload, _, err = readShort(payload)
 		if err != nil {
@@ -290,11 +292,11 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 		}
 
 		// read flags
-		if req.version > 4 {
-			payload, _, err = readUint(payload)
-		} else {
-			payload, _, err = readByte(payload)
-		}
+		// if req.version > 4 {
+		payload, _, err = readUint(payload)
+		// } else {
+		// 	payload, _, err = readByte(payload)
+		// }
 		if err != nil {
 			fmt.Printf("read flags err: %v\n", err)
 			return
