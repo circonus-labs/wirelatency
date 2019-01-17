@@ -93,7 +93,7 @@ func (twa *tcpTwoWayStream) release() bool {
 
 	if !twa.inCreated && !twa.outCreated {
 		if *debug_capture {
-			log.Printf("[DEBUG] cleanup shitting down %v", twa)
+			log.Printf("[DEBUG] cleanup shutting down %v", twa)
 		}
 		if twa.in != nil {
 			twa.in.parent = nil
