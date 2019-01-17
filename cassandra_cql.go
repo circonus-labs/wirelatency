@@ -3,10 +3,13 @@ package wirelatency
 import (
 	"encoding/binary"
 	"flag"
-	"github.com/golang/snappy"
+	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
+
+	"github.com/golang/snappy"
 )
 
 var debug_cql = flag.Bool("debug_cql", false, "Debug cassandra cql reassembly")
@@ -262,6 +265,53 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 		}
 	}
 
+	var buf strings.Builder
+
+	buf.WriteString("request cql: %s, args: ")
+
+	payload := req.payload
+	if len(payload) >= 2 {
+		// read consistency
+		payload, _ := readShort(payload)
+
+		// read flags
+		if req.version > 4 {
+			payload, _ = readUint(payload)
+		} else {
+			payload, _ = readByte(payload)
+		}
+
+		// read num args
+		payload, args := readShort(payload)
+
+		// read args
+		for i := 0; i < int(args); i++ {
+			buf.WriteString(fmt.Sprintf("arg%d=", i))
+
+			var numBytes int32
+			payload, numBytes = readInt(payload)
+			switch {
+			case numBytes == -1:
+				// nil
+				buf.WriteString("nil")
+			case numBytes == -2:
+				// unset
+				buf.WriteString("unset")
+			case numBytes >= 0:
+				buf.WriteString(fmt.Sprintf("%x", payload[:numBytes]))
+				payload = payload[numBytes:]
+			}
+
+			if i != int(args)-1 {
+				buf.WriteString(", ")
+			}
+		}
+	}
+
+	buf.WriteString("\n")
+
+	os.Stdout.WriteString(buf.String())
+
 	duration := resp.timestamp.Sub(req.timestamp)
 
 	name := req.OpcodeName()
@@ -278,6 +328,28 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 		wl_track_float64("seconds", float64(duration)/1000000000.0, execName+"`latency")
 	}
 }
+
+var endianness = binary.BigEndian
+
+func readByte(b []byte) ([]byte, byte) {
+	return b[1:], b[0]
+}
+
+func readShort(b []byte) ([]byte, uint16) {
+	v := endianness.Uint16(b[:2])
+	return b[2:], v
+}
+
+func readUint(b []byte) ([]byte, uint32) {
+	v := endianness.Uint32(b[:4])
+	return b[4:], v
+}
+
+func readInt(p []byte) ([]byte, int32) {
+	v := int32(p[0])<<24 | int32(p[1])<<16 | int32(p[2])<<8 | int32(p[3])
+	return p[4:], v
+}
+
 func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	// build a request
 	for {
