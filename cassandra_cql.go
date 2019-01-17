@@ -285,7 +285,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 		// read consistency
 		payload, _, err = readShort(payload)
 		if err != nil {
-			fmt.Printf("read consistency err: %v", err)
+			fmt.Printf("read consistency err: %v\n", err)
 			return
 		}
 
@@ -296,7 +296,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			payload, _, err = readByte(payload)
 		}
 		if err != nil {
-			fmt.Printf("read flags err: %v", err)
+			fmt.Printf("read flags err: %v\n", err)
 			return
 		}
 
@@ -304,7 +304,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 		var args uint16
 		payload, args, err = readShort(payload)
 		if err != nil {
-			fmt.Printf("read num args err: %v", err)
+			fmt.Printf("read num args err: %v\n", err)
 			return
 		}
 
@@ -313,7 +313,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			var numBytes int32
 			payload, numBytes, err = readInt(payload)
 			if err != nil {
-				fmt.Printf("read arg %d length err: %v", i, err)
+				fmt.Printf("read arg %d length err: %v\n", i, err)
 				return
 			}
 			switch {
@@ -327,7 +327,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 				var bytes []byte
 				payload, bytes, err = readBytes(payload, int(numBytes))
 				if err != nil {
-					fmt.Printf("read arg %d value err: %v", i, err)
+					fmt.Printf("read arg %d value err: %v\n", i, err)
 					return
 				}
 				buf.WriteString(fmt.Sprintf("\"%x\"", bytes))
