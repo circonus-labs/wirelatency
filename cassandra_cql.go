@@ -226,14 +226,22 @@ func (p *cassandra_cql_Parser) popFromStream(stream int16) (f *cassandra_cql_fra
 }
 
 func read_longstring(data []byte) (out string, ok bool) {
-	if len(data) < 4 {
+	var (
+		v   int32
+		err error
+	)
+	data, v, err = readInt(data)
+	if err != nil {
 		return "", false
 	}
-	strlen := binary.BigEndian.Uint32(data)
-	if len(data) < (4 + int(strlen)) {
+
+	var bytes []byte
+	_, bytes, err = readBytes(data, int(v))
+	if err != nil {
 		return "", false
 	}
-	return string(data[4 : strlen+4]), true
+
+	return string(bytes), true
 }
 
 var DEFAULT_CQL string = "unknown cql"
@@ -244,6 +252,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 	var (
 		cql  *string
 		data []byte
+		err  error
 	)
 	cql = &DEFAULT_CQL
 	data = req.data
@@ -260,14 +269,27 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 				qcql = strings.Replace(qcql, "\n", " ", -1)
 				qcql = strings.Replace(qcql, "\r", " ", -1)
 				cql = &qcql
-				p.factory.parsed[binary.BigEndian.Uint16(resp.data)] = *cql
+
+				var id []byte
+				resp.data, id, err = readShortBytes(resp.data)
+				if err != nil {
+					fmt.Printf("read prepared id err: %v\n", err)
+					return
+				}
+
+				p.factory.parsed[string(id)] = *cql
 			}
 		}
 	}
 	if req.opcode == cmd_EXECUTE && req.data != nil && len(req.data) >= 2 {
-		id := binary.BigEndian.Uint16(req.data)
-		data = data[2:]
-		if prepared_cql, ok := p.factory.parsed[id]; ok {
+		var id []byte
+		data, id, err = readShortBytes(req.data)
+		if err != nil {
+			fmt.Printf("read execute id err: %v\n", err)
+			return
+		}
+
+		if prepared_cql, ok := p.factory.parsed[string(id)]; ok {
 			cql = &prepared_cql
 		} else {
 			cql = &DEFAULT_CQL
@@ -279,14 +301,11 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 
 		buf.WriteString(fmt.Sprintf("{\"cql\": \"%s\", \"args\": [", *cql))
 
-		var (
-			payload = data
-			err     error
-		)
-
 		if *debug_cql_req {
 			fmt.Printf("proto version: %d\n", int(req.version))
 		}
+
+		payload := data
 
 		// read consistency
 		var consistency uint16
@@ -362,7 +381,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 			}
 
 			if *debug_cql_req {
-				fmt.Printf("arg %d length: %d\n", numBytes)
+				fmt.Printf("arg %d length: %d\n", i, numBytes)
 			}
 
 			switch {
@@ -380,7 +399,7 @@ func (p *cassandra_cql_Parser) report(req, resp *cassandra_cql_frame) {
 					return
 				}
 				if *debug_cql_req {
-					fmt.Printf("arg %d value: %x\n", bytes)
+					fmt.Printf("arg %d value: %x\n", i, bytes)
 				}
 
 				buf.WriteString(fmt.Sprintf("\"%x\"", bytes))
@@ -455,6 +474,16 @@ func readBytes(b []byte, n int) (payload []byte, bytes []byte, err error) {
 	return
 }
 
+func readShortBytes(b []byte) (payload []byte, bytes []byte, err error) {
+	var n uint16
+	b, n, err = readShort(b)
+	if err != nil {
+		return nil, nil, fmt.Errorf("readBytes: readShort failed: %v", err)
+	}
+
+	return readBytes(b, int(n))
+}
+
 func (p *cassandra_cql_Parser) InBytes(stream *tcpTwoWayStream, seen time.Time, data []byte) bool {
 	// build a request
 	for {
@@ -518,7 +547,7 @@ func (p *cassandra_cql_Parser) ManageOut(stream *tcpTwoWayStream) {
 }
 
 type cassandra_cql_ParserFactory struct {
-	parsed map[uint16]string
+	parsed map[string]string
 }
 
 func (f *cassandra_cql_ParserFactory) New() TCPProtocolInterpreter {
@@ -531,7 +560,7 @@ func (f *cassandra_cql_ParserFactory) New() TCPProtocolInterpreter {
 }
 func init() {
 	factory := &cassandra_cql_ParserFactory{}
-	factory.parsed = make(map[uint16]string)
+	factory.parsed = make(map[string]string)
 	cassProt := &TCPProtocol{name: "cassandra_cql", defaultPort: 9042}
 	cassProt.interpFactory = factory
 	RegisterTCPProtocol(cassProt)
