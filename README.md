@@ -92,3 +92,29 @@ sizes.  All production "Produce" and consumption "Fetch" are tracked in
 `_aggregate` and by topic.  Messages in production and consumption are expanded
 (including gzip and snappy) to analyze for message timestamps (for latency) and
 uncompressed payload sizes.
+
+
+# Installation
+
+Installation assuming a working installation of go:
+
+- go executable is on `$PATH`
+- `$GOPATH` is set
+
+Tested with go version 1.7.1 on 2016-09-28.
+
+## Ubuntu 12.04
+
+Installation:
+```
+sudo apt-get install libpcap-dev # need pcap.h
+go get github.com/circonus-labs/wirelatency
+```
+
+Running:
+```
+cd $GOPATH/src/github.com/circonus-labs/wirelatency/protocol_observer
+go build
+./protocol-observer <options>
+# or: sudo go run protocol-observer.go  <options>
+```
